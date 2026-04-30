@@ -1,0 +1,878 @@
+//$tab Main
+
+SET ThousandSep=' ';
+SET DecimalSep=',';
+SET MoneyThousandSep=' ';
+SET MoneyDecimalSep=',';
+SET MoneyFormat='# ##0,00 ₽;-# ##0,00 ₽';
+SET TimeFormat='h:mm:ss';
+SET DateFormat='DD.MM.YYYY';
+SET TimestampFormat='DD.MM.YYYY h:mm:ss[.fff]';
+SET FirstWeekDay=0;
+SET BrokenWeeks=1;
+SET ReferenceDay=0;
+SET FirstMonthOfYear=1;
+SET CollationLocale='ru-RU';
+SET CreateSearchIndexOnReload=0;
+SET MonthNames='янв.;февр.;мар.;апр.;мая;июн.;июл.;авг.;сент.;окт.;нояб.;дек.';
+SET LongMonthNames='январь;февраль;март;апрель;май;июнь;июль;август;сентябрь;октябрь;ноябрь;декабрь';
+SET DayNames='пн;вт;ср;чт;пт;сб;вс';
+SET LongDayNames='понедельник;вторник;среда;четверг;пятница;суббота;воскресенье';
+SET NumericalAbbreviation='3:k;6:M;9:G;12:T;15:P;18:E;21:Z;24:Y;-3:m;-6:μ;-9:n;-12:p;-15:f;-18:a;-21:z;-24:y';
+
+//===================================================================
+set vQVDPath=[lib://OLAP (fixmt_stefanovich)/];
+//set vQVDPath=[lib://UT-PLAYH (fixmt_esipovich)/]
+set vExcelPath=[lib://Excel (fixmt_stefanovich)/];
+//===================================================================
+let FullReload=0; //Полная или частичная перегрузка
+//===================================================================
+let DateStart = date(AddYears(MakeDate((2022),1,1),2000));
+let DateFinish = date(AddYears(today(1),2000));
+let RollBackMonthCount = IF(FullReload=1,23,3);
+//let RollBackMonthCount = IF(FullReload=1,35,IF(match(num(WeekDay(today(2))),5,6),35,3)); 
+ 
+//===================================================================
+LIB CONNECT TO 'UT-PLAYH (fixmt_stefanovich)'; //Продуктив
+//LIB CONNECT TO 'UT-PLAYH (fixmt_esipovich)';
+//===================================================================
+
+
+// Exit script;
+
+
+//$tab Справочники
+
+/*
+Справочник.Валюты (_Reference59)
+Справочник.Склады (_Reference132)
+Справочник.Номенклатура (_Reference111)
+Справочник.Контрагенты (_Reference55)
+Справочник.НоменклатурныеГруппы (_Reference112)
+Справочник.Пользователи (_Reference121)
+Справочник.ВидыНоменклатуры (_Reference70)
+Справочник.nwpРегионы (_Reference171)
+*/
+
+//Справочник.Валюты 
+_Reference59:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Reference59";
+
+store _Reference59 into [$(vQVDPath)/_Reference/_Reference59.qvd](qvd);
+drop table _Reference59;
+
+//Справочник.Склады 
+_Reference132:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Reference132"
+where _Marked = 0;
+
+store _Reference132 into [$(vQVDPath)/_Reference/_Reference132.qvd](qvd);
+drop table _Reference132;
+
+//Справочник.Номенклатура 
+_Reference111:
+LOAD
+	Text(_Code) as _Code1
+    ,*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Reference111";
+
+Drop Field _Code From _Reference111;
+Rename Field _Code1 to _Code; 
+
+store _Reference111 into [$(vQVDPath)/_Reference/_Reference111.qvd](qvd);
+drop table _Reference111;
+
+//Справочник.Контрагенты 
+_Reference55:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Reference55";
+
+store _Reference55 into [$(vQVDPath)/_Reference/_Reference55.qvd](qvd);
+drop table _Reference55;
+
+//Справочник.НоменклатурныеГруппы 
+// _Reference112:
+// LOAD
+// 	*
+// ;	
+// SQL SELECT 
+// 	*
+// FROM "UT-PLAYH".dbo."_Reference112";
+
+// store _Reference112 into [$(vQVDPath)/_Reference/_Reference112.qvd](qvd);
+// drop table _Reference112;
+
+//Справочник.Пользователи 
+_Reference121:
+LOAD *;	
+SQL SELECT *
+FROM "UT-PLAYH".dbo."_Reference121";
+store _Reference121 into [$(vQVDPath)/_Reference/_Reference121.qvd](qvd);
+drop table _Reference121;
+
+//Справочник.ВидыНоменклатуры 
+_Reference70:
+LOAD *;	
+SQL SELECT *
+FROM "UT-PLAYH".dbo."_Reference70";
+store _Reference70 into [$(vQVDPath)/_Reference/_Reference70.qvd](qvd);
+drop table _Reference70;
+
+//Справочник.Направления 
+_Reference21344:
+LOAD *;	
+SQL SELECT
+	[_IDRRef] as КодНаправление,
+    [_Description] as Направление
+FROM "UT-PLAYH".dbo."_Reference21344";
+store _Reference21344 into [$(vQVDPath)/_Reference/_Reference21344.qvd](qvd);
+drop table _Reference21344;
+
+//Справочник.nwpРегионы (_Reference171)
+_Reference171:
+LOAD *;	
+SQL SELECT 
+	[_IDRRef] as КодРегион,
+    [_Description] as Регион
+FROM "UT-PLAYH".dbo."_Reference171";
+store _Reference171 into [$(vQVDPath)/_Reference/_Reference171.qvd](qvd);
+drop table _Reference171;
+
+//Справочник.Бренды (_Reference21715)
+_Reference21715:
+LOAD *;	
+SQL SELECT *
+FROM "UT-PLAYH".dbo."_Reference21715";
+store _Reference21715 into [$(vQVDPath)/_Reference/_Reference21715.qvd](qvd);
+drop table _Reference21715;
+
+//Exit script;
+
+
+//$tab Документы
+
+/*
+Документ.ПоступлениеТоваровИУслуг (_Document290)
+Документ.РеализацияТоваровУслуг (_Document299)
+Документ.ОтчетОРозничныхПродажах (_Document270)
+Документ.ВозвратТоваровОтПокупателя (_Document197)
+Документ.ПеремещениеТоваров (_Document272)
+Документ.ВозвратТоваровПоставщику (_Document198)
+Документ.ОприходованиеТоваров (_Document263)
+Документ.СписаниеТоваров (_Document306)
+Документ.nwpРекламнаяАкция (_Document383)
+Документ.ПереоценкаТоваровВРознице (_Document274)
+*/
+
+//Документ.ПоступлениеТоваровИУслуг 
+_Document290:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Document290";
+
+store _Document290 into [$(vQVDPath)/_Document/_Document290.qvd](qvd);
+drop table _Document290;
+
+//Документ.РеализацияТоваровУслуг 
+_Document299:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Document299";
+
+store _Document299 into [$(vQVDPath)/_Document/_Document299.qvd](qvd);
+drop table _Document299;
+
+// //Документ.ОтчетОРозничныхПродажах 
+// _Document270:
+// LOAD
+// 	*
+// ;	
+// SQL SELECT 
+// 	*
+// FROM "UT-PLAYH".dbo."_Document270";
+
+// store _Document270 into [$(vQVDPath)/_Document/_Document270.qvd](qvd);
+// drop table _Document270;
+
+//Документ.ВозвратТоваровОтПокупателя 
+_Document197:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Document197";
+
+store _Document197 into [$(vQVDPath)/_Document/_Document197.qvd](qvd);
+drop table _Document197;
+
+// //Документ.ПеремещениеТоваров 
+// _Document272:
+// LOAD
+// 	*
+// ;	
+// SQL SELECT 
+// 	*
+// FROM "UT-PLAYH".dbo."_Document272";
+
+// store _Document272 into [$(vQVDPath)/_Document/_Document272.qvd](qvd);
+// drop table _Document272;
+
+// //Документ.ВозвратТоваровПоставщику 
+// _Document198:
+// LOAD
+// 	*
+// ;	
+// SQL SELECT 
+// 	*
+// FROM "UT-PLAYH".dbo."_Document198";
+
+// store _Document198 into [$(vQVDPath)/_Document/_Document198.qvd](qvd);
+// drop table _Document198;
+
+// //Документ.ОприходованиеТоваров 
+// _Document263:
+// LOAD
+// 	*
+// ;	
+// SQL SELECT 
+// 	*
+// FROM "UT-PLAYH".dbo."_Document263";
+
+// store _Document263 into [$(vQVDPath)/_Document/_Document263.qvd](qvd);
+// drop table _Document263;
+
+// //Документ.СписаниеТоваров 
+// _Document306:
+// LOAD
+// 	*
+// ;	
+// SQL SELECT 
+// 	*
+// FROM "UT-PLAYH".dbo."_Document306";
+
+// store _Document306 into [$(vQVDPath)/_Document/_Document306.qvd](qvd);
+// drop table _Document306;
+
+//Документ.nwpРекламнаяАкция 
+_Document383:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Document383";
+
+store _Document383 into [$(vQVDPath)/_Document/_Document383.qvd](qvd);
+drop table _Document383;
+
+//Документ.ПереоценкаТоваровВРознице
+_Document274:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Document274";
+
+store _Document274 into [$(vQVDPath)/_Document/_Document274.qvd](qvd);
+drop table _Document274;
+
+//Документ.ЗаказПокупателя для ЯндексДоставки
+_Document221:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Document221";
+
+store _Document221 into [$(vQVDPath)/_Document/_Document221.qvd](qvd);
+drop table _Document221;
+
+
+//$tab ДокументыСостав
+
+/*
+Документ.РеализацияТоваровУслуг.Товары (_Document299_VT5114)		
+Документ.ОтчетОРозничныхПродажах.Товары (_Document270_VT3640)		
+Документ.ВозвратТоваровОтПокупателя.Товары (_Document197_VT1211)    
+*/
+
+let DateInc = DateStart;
+let DateLoadTo = DateFinish; 
+
+do
+	let DateFrom = DateInc; 
+	let DateTo = MonthEnd(DateInc);
+	let DateToSQL = date(MonthEnd(DateInc)+1);
+	let FileSuffix = Text(date(AddYears(DateInc,-2000),'YYYY_MM'));
+	let InRollBack  = (DateInc>=AddMonths(DateLoadTo, -RollBackMonthCount));
+
+
+if InRollBack or isnull(FileSize('$(vQVDPath)/_Document/_Document299_VT5114/_Document299_VT5114_$(FileSuffix).qvd')) then
+	
+TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);	
+
+//Документ.РеализацияТоваровУслуг.Товары 
+_Document299_VT5114:
+load *;
+;
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Document299_VT5114"
+inner join
+"UT-PLAYH".dbo."_Document299"
+on 
+_Document299_VT5114._Document299_IDRRef=_Document299._IDRRef
+where Convert(date,_Date_Time,104)>= Convert(date,'$(DateFrom)',104) and Convert(date,_Date_Time,104)< Convert(date,'$(DateToSQL)',104)
+and _Posted=01 and _Marked=00
+;
+
+store _Document299_VT5114 into [$(vQVDPath)/_Document/_Document299_VT5114/_Document299_VT5114_$(FileSuffix).qvd](qvd);
+drop table _Document299_VT5114;
+
+ENDIF
+
+if InRollBack or isnull(FileSize('$(vQVDPath)/_Document/_Document270_VT3640/_Document270_VT3640_$(FileSuffix).qvd')) then
+	
+TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);	
+
+//Документ.ОтчетОРозничныхПродажах.Товары 
+_Document270_VT3640:
+load *;
+;
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Document270_VT3640"
+inner join
+"UT-PLAYH".dbo."_Document270"
+on 
+_Document270_VT3640._Document270_IDRRef=_Document270._IDRRef
+where Convert(date,_Date_Time,104)>= Convert(date,'$(DateFrom)',104) and Convert(date,_Date_Time,104)< Convert(date,'$(DateToSQL)',104)
+and _Posted=01 and _Marked=00
+;
+
+store _Document270_VT3640 into [$(vQVDPath)/_Document/_Document270_VT3640/_Document270_VT3640_$(FileSuffix).qvd](qvd);
+drop table _Document270_VT3640;
+
+ENDIF
+
+if InRollBack or isnull(FileSize('$(vQVDPath)/_Document/_Document197_VT1211/_Document197_VT1211_$(FileSuffix).qvd')) then
+	
+TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);	
+
+//Документ.ВозвратТоваровОтПокупателя.Товары 
+_Document197_VT1211:
+load *;
+;
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Document197_VT1211"
+inner join
+"UT-PLAYH".dbo."_Document197"
+on 
+_Document197_VT1211._Document197_IDRRef=_Document197._IDRRef
+where Convert(date,_Date_Time,104)>= Convert(date,'$(DateFrom)',104) and Convert(date,_Date_Time,104)< Convert(date,'$(DateToSQL)',104)
+and _Posted=01 and _Marked=00
+;
+
+store _Document197_VT1211 into [$(vQVDPath)/_Document/_Document197_VT1211/_Document197_VT1211_$(FileSuffix).qvd](qvd);
+drop table _Document197_VT1211;
+
+ENDIF
+
+if InRollBack or isnull(FileSize('$(vQVDPath)/_Document/_Document383_VT7745/_Document383_VT7745_$(FileSuffix).qvd')) then
+
+TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);	
+
+//Документ.nwpРекламнаяАкция.Товары 
+_Document383_VT7745:
+load *;
+;
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Document383_VT7745"
+inner join
+"UT-PLAYH".dbo."_Document383"
+on 
+_Document383_VT7745._Document383_IDRRef=_Document383._IDRRef
+where Convert(date,_Date_Time,104)>= Convert(date,'$(DateFrom)',104) and Convert(date,_Date_Time,104)< Convert(date,'$(DateToSQL)',104)
+and _Posted=01 and _Marked=00
+;
+
+store _Document383_VT7745 into [$(vQVDPath)/_Document/_Document383_VT7745/_Document383_VT7745_$(FileSuffix).qvd](qvd);
+drop table _Document383_VT7745;
+
+ENDIF
+
+
+//Документ.ЗаказПокупателя.ТабличнаяЧасть.Товары для ЯндексДоставки
+if InRollBack or isnull(FileSize('$(vQVDPath)/_Document/_Document221_VT1951/_Document221_VT1951_$(FileSuffix).qvd')) then
+
+TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);	
+
+_Document221_VT1951:
+load *;
+;
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Document221_VT1951"
+inner join
+"UT-PLAYH".dbo."_Document221"
+on 
+_Document221_VT1951._Document221_IDRRef=_Document221._IDRRef
+where Convert(date,_Date_Time,104)>= Convert(date,'$(DateFrom)',104) and Convert(date,_Date_Time,104)< Convert(date,'$(DateToSQL)',104)
+and _Posted=01 and _Marked=00
+;
+
+store _Document221_VT1951 into [$(vQVDPath)/_Document/_Document221_VT1951/_Document221_VT1951_$(FileSuffix).qvd](qvd);
+drop table _Document221_VT1951;
+
+ENDIF
+
+
+
+///////////
+
+let DateInc = timestamp(AddMonths(DateInc, 1));
+LOOP while not InMonth(DateInc, DateLoadTo, 1);	
+
+//$tab РегистрыНакоплений
+
+/*
+РегистрНакопления.ПартииТоваровНаСкладах (_AccumRg11058)
+РегистрНакопления.ТоварыВРознице (_AccumRg11432)
+*/
+
+let DateInc = DateStart;
+let DateLoadTo = DateFinish; 
+
+do
+	let DateFrom = DateInc; 
+	let DateTo = MonthEnd(DateInc);
+	let DateToSQL = date(MonthEnd(DateInc)+1);
+	let FileSuffix = Text(date(AddYears(DateInc,-2000),'YYYY_MM'));
+	let InRollBack  = (DateInc>=AddMonths(DateLoadTo, -RollBackMonthCount));	
+
+if InRollBack or isnull(FileSize('$(vQVDPath)/_AccumRg/_AccumRg11058/_AccumRg11058_$(FileSuffix).qvd')) then
+	
+TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);	
+
+//РегистрНакопления.ПартииТоваровНаСкладах
+_AccumRg11058:
+load *;
+;
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_AccumRg11058"
+where Convert(date,_Period,104)>= Convert(date,'$(DateFrom)',104) and Convert(date,_Period,104)< Convert(date,'$(DateToSQL)',104)
+;
+
+store _AccumRg11058 into [$(vQVDPath)/_AccumRg/_AccumRg11058/_AccumRg11058_$(FileSuffix).qvd](qvd);
+drop table _AccumRg11058;
+
+
+ENDIF
+
+if InRollBack or isnull(FileSize('$(vQVDPath)/_AccumRg/_AccumRg11432/_AccumRg11432_$(FileSuffix).qvd')) then
+	
+TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);	
+
+//РегистрНакопления.ТоварыВРознице
+_AccumRg11432:
+load *;
+;
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_AccumRg11432"
+where Convert(date,_Period,104)>= Convert(date,'$(DateFrom)',104) and Convert(date,_Period,104)< Convert(date,'$(DateToSQL)',104)
+;
+
+store _AccumRg11432 into [$(vQVDPath)/_AccumRg/_AccumRg11432/_AccumRg11432_$(FileSuffix).qvd](qvd);
+drop table _AccumRg11432;
+
+
+ENDIF
+
+if InRollBack or isnull(FileSize('$(vQVDPath)/_AccumRg/_AccumRg11222/_AccumRg11222_$(FileSuffix).qvd')) then
+	
+TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);	
+
+//РегистрНакопления.Продажи
+_AccumRg11222:
+load *;
+;
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_AccumRg11222"
+where Convert(date,_Period,104)>= Convert(date,'$(DateFrom)',104) and Convert(date,_Period,104)< Convert(date,'$(DateToSQL)',104)
+;
+
+store _AccumRg11222 into [$(vQVDPath)/_AccumRg/_AccumRg11222/_AccumRg11222_$(FileSuffix).qvd](qvd);
+drop table _AccumRg11222;
+
+ENDIF
+
+
+if InRollBack or isnull(FileSize('$(vQVDPath)/_AccumRg/_AccumRg11284/_AccumRg11284_$(FileSuffix).qvd')) then
+	
+TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);	
+
+//РегистрНакопления.ПродажиСебестоимость
+_AccumRg11284:
+load *;
+;
+SQL SELECT 
+	Convert(date,_Period,104) as Дата,
+    [_RecorderTRef] as "Тип документа",
+    _RecorderRRef,
+    _Fld11285RRef as КодНоменклатура,
+    _Fld11287_RRRef as _Document221_IDRRef, //ЗаказПокупателя
+    Sum(_Fld11292) as Количество,
+    Sum(_Fld11293)/Sum(_Fld11292) as Стоимость
+FROM "UT-PLAYH".dbo."_AccumRg11284"
+where Convert(date,_Period,104)>= Convert(date,'$(DateFrom)',104) and Convert(date,_Period,104)< Convert(date,'$(DateToSQL)',104)
+Group by Convert(date,_Period,104), _RecorderRRef, _Fld11285RRef, _Fld11287_RRRef, _RecorderTRef
+;
+
+store _AccumRg11284 into [$(vQVDPath)/_AccumRg/_AccumRg11284/_AccumRg11284_$(FileSuffix).qvd](qvd);
+drop table _AccumRg11284;
+
+ENDIF
+
+// if InRollBack or isnull(FileSize('$(vQVDPath)/_AccumRg/_AccumRgT11081/_AccumRgT11081_$(FileSuffix).qvd')) then
+	
+// TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);	
+
+// if MonthEnd(DateInc)=MonthEnd(DateLoadTo) then //Остаток на сейчас
+
+// //РегистрНакопления.ПартииТоваровНаСкладахИтоги
+// _AccumRgT11081:
+// load 
+// *;
+// ;
+// SQL SELECT 
+// 	'$(DateFrom)' as _Period,
+//     _Fld11059RRef,
+//     _Fld11060RRef,
+//     _Fld11063_RRRef,
+//     _Fld11067,
+//     _Fld11069 
+// FROM "UT-PLAYH".dbo."_AccumRgT11081"
+// where Convert(date,_Period,104)= Convert(date,'01.11.5999',104) //Остаток на сейчас
+// ;
+
+// store _AccumRgT11081 into [$(vQVDPath)/_AccumRg/_AccumRgT11081/_AccumRgT11081_$(FileSuffix).qvd](qvd);
+// drop table _AccumRgT11081;
+
+// ELSE
+
+// //РегистрНакопления.ПартииТоваровНаСкладахИтоги
+// _AccumRgT11081:
+// load *;
+// ;
+// SQL SELECT 
+// 	*
+// FROM "UT-PLAYH".dbo."_AccumRgT11081"
+// where Convert(date,_Period,104)>= Convert(date,'$(DateFrom)',104) and Convert(date,_Period,104)< Convert(date,'$(DateToSQL)',104)
+// ;
+
+// store _AccumRgT11081 into [$(vQVDPath)/_AccumRg/_AccumRgT11081/_AccumRgT11081_$(FileSuffix).qvd](qvd);
+// drop table _AccumRgT11081;
+
+
+// ENDIF
+// ENDIF
+
+let DateInc = timestamp(AddMonths(DateInc, 1));
+LOOP while not InMonth(DateInc, DateLoadTo, 1); //exit script;
+
+//$tab РегистрыCведений
+
+// /*
+// РегистрСведений.КурсыВалют (_InfoRg9130)
+// РегистрСведений.ЗначенияСвойствОбъектов (_InfoRg9002)
+// РегистрСведений.Штрихкоды (_InfoRg9929)
+// РегистрСведений.ЦеныАТТ (_InfoRg9871)
+// */
+
+//РегистрСведений.КурсыВалют 
+_InfoRg9130:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_InfoRg9130";
+
+store _InfoRg9130 into [$(vQVDPath)/_InfoRg/_InfoRg9130.qvd](qvd);
+drop table _InfoRg9130;
+
+
+//РегистрСведений.Штрихкоды 
+_InfoRg9929:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_InfoRg9929";
+
+store _InfoRg9929 into [$(vQVDPath)/_InfoRg/_InfoRg9929.qvd](qvd);
+drop table _InfoRg9929;
+
+//РегистрСведений.ЦеныАТТ 
+_InfoRg9871:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_InfoRg9871";
+
+store _InfoRg9871 into [$(vQVDPath)/_InfoRg/_InfoRg9871.qvd](qvd);
+drop table _InfoRg9871;
+
+
+//РегистрСведений.ЗначенияСвойствОбъектов 
+_InfoRg9002:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_InfoRg9002";
+
+store _InfoRg9002 into [$(vQVDPath)/_InfoRg/_InfoRg9002.qvd](qvd);
+drop table _InfoRg9002;
+
+// РегистрСведений.ВерсииОбъектов для ЯндексДоставки
+_InfoRg8826:
+LOAD *;
+SQL
+Select _Document221_IDRRef, Автор from ( 
+SELECT ir.[_Fld8827_RRRef] as _Document221_IDRRef, ir.[_Fld8830_RRRef] as Автор, Row_Number() over (partition by ir.[_Fld8827_RRRef] order by ir.[_Fld8828] desc ) as NN
+from [UT-PLAYH].dbo.[_InfoRg8826] ir 
+where ir.[_Fld8827_RRRef] in (SELECT [_IDRRef] FROM [UT-PLAYH].dbo.[_Document221]
+WHERE [_Fld1929RRef] = 0xB3317DF3BA84E9E9455BB4C811186CD9 and [_Date_Time] >= '4024-11-07' and [_Posted] = 1)) as t1 where NN=1;
+
+//     SQL SELECT * from [UT-PLAYH].dbo.[_InfoRg8826] ir where
+// ir.[_Fld8827_RRRef] in (SELECT [_IDRRef] FROM [UT-PLAYH].dbo.[_Document221]
+// WHERE [_Fld1929RRef] = 0xB3317DF3BA84E9E9455BB4C811186CD9 and [_Date_Time] >= '4024-11-07' and [_Posted] = 1);
+store _InfoRg8826 into [$(vQVDPath)/_InfoRg/_InfoRg8826.qvd](qvd);
+drop table _InfoRg8826;
+//exit script;
+
+//$tab ПланВидовХарактеристик
+
+/*
+ПланВидовХарактеристик.СвойстваОбъектов (_Chrc656)
+*/
+
+//ПланВидовХарактеристик.СвойстваОбъектов 
+_Chrc656:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Chrc656";
+
+store _Chrc656 into [$(vQVDPath)/_Chrc/_Chrc656.qvd](qvd);
+drop table _Chrc656;
+
+//$tab Перечисления
+
+/*
+Перечисление.nwpСтатусРА (_Enum624)
+Перечисление.СтавкиНДС (_Enum565)
+Перечисление.nwpСтатусТовара (_Enum625)
+*/
+
+//Перечисление.nwpСтатусРА 
+_Enum624:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Enum624";
+
+store _Enum624 into [$(vQVDPath)/_Enum/_Enum624.qvd](qvd);
+drop table _Enum624;
+
+//Перечисление.СтавкиНДС 
+_Enum565:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Enum565";
+
+store _Enum565 into [$(vQVDPath)/_Enum/_Enum565.qvd](qvd);
+drop table _Enum565;
+
+//Перечисление.nwpСтатусТовара
+_Enum625:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Enum625";
+
+store _Enum625 into [$(vQVDPath)/_Enum/_Enum625.qvd](qvd);
+drop table _Enum625;
+
+//Перечисление.ВидыСкладов
+_Enum486:
+LOAD
+	*
+;	
+SQL SELECT 
+	*
+FROM "UT-PLAYH".dbo."_Enum486";
+
+store _Enum486 into [$(vQVDPath)/_Enum/_Enum486.qvd](qvd);
+drop table _Enum486;
+
+//$tab BUH-PLAYH
+
+
+LIB CONNECT TO 'BUH-PLAYH';
+
+//Справочник.МестаХранения
+_Reference115:
+LOAD *;	
+SQL SELECT 
+	*
+FROM "BUH-PLAYH".dbo."_Reference115";
+store _Reference115 into [$(vQVDPath)/BUH-PLAYH/_Reference115.qvd](qvd);
+drop table _Reference115;
+
+// Перечисление.nwpТипМагазина	
+[_Enum633]:
+LOAD *;	
+SQL SELECT
+    e._IDRRef as КодТипМагазин,
+    e._EnumOrder,
+    m.ТипМагазина
+FROM "UT-PLAYH".dbo."_Enum633" e
+    INNER JOIN (
+       VALUES
+            (0, 'Тип 1'),
+            (1, 'Тип 2'),
+            (2, 'Тип 3'),
+            (3, 'Тип 4'),
+            (4, 'Тип 5'),
+            (5, 'Тип 6'),
+            (6, 'Тип 7'),
+            (7, 'Тип 8'),
+            (8, 'Тип 9'),
+            (9, 'Тип 10'),
+            (10, 'Тип 11'),
+            (11, 'Тип 12'),
+            (12, 'Тип 1 N'),
+            (13, 'Тип 2 N'),
+            (14, 'Тип 3 N'),
+            (15, 'Тип 4 N'),
+            (16, 'Тип 5 N'),
+            (17, 'Тип 6 N'),
+            (18, 'Тип 7 N'),
+            (19, 'Тип 8 N'),
+            (20, 'Тип 9 N'),
+            (21, 'Тип 10 N'),
+            (22, 'Тип 11 N'),
+            (23, 'Тип 12 N')
+    ) m (_EnumOrder, ТипМагазина)
+    ON e._EnumOrder = m._EnumOrder; 
+store _Enum633 into [$(vQVDPath)/BUH-PLAYH/_Enum633.qvd](qvd);
+drop table _Enum633;
+
+
+//Документ.ПоказателиДляОтчетаПоТО	_Document18982
+[_Document18982_VT18990]:
+LOAD *;
+SQL
+SELECT "_Document18982_IDRRef",
+	DATEADD(year, -2000, Convert(date,t2.[_Date_Time],104)) as Дата,
+	"_KeyField",
+	"_LineNo18991",
+	"_Fld18992RRef",
+	"_Fld18993",
+	"_Fld18994",
+	"_Fld18995",
+	"_Fld18996",
+	"_Fld18997",
+	"_Fld18998",
+	"_Fld18999",
+	"_Fld19000",
+	"_Fld19001",
+	"_Fld19002",
+	"_Fld19003",
+	"_Fld19004",
+	"_Fld19005",
+	"_Fld19006",
+	"_Fld19007",
+	"_Fld19008",
+	"_Fld19009",
+	"_Fld19010",
+	"_Fld19011",
+	"_Fld19012",
+	"_Fld19013",
+	"_Fld19014",
+	"_Fld19015",
+	"_Fld19016",
+	"_Fld19017",
+	"_Fld19018",
+	"_Fld19019",
+	"_Fld19020",
+	"_Fld19119",
+	"_Fld19021",
+	"_Fld19022",
+	"_Fld19023",
+	"_Fld19024",
+	"_Fld19025",
+	"_Fld19657",
+	"_Fld19026",
+	"_Fld19027",
+	"_Fld19028",
+	"_Fld19029",
+	"_Fld19030",
+	"_Fld19031",
+	"_Fld19032",
+	"_Fld19033",
+	"_Fld19034",
+	"_Fld19120",
+	"_Fld19121"
+FROM "BUH-PLAYH".dbo."_Document18982_VT18990" as t1
+join "BUH-PLAYH".dbo.[_Document18982] as t2 on t1.[_Document18982_IDRRef] = t2.[_IDRRef];
+
+store _Document18982_VT18990 into [$(vQVDPath)/BUH-PLAYH/_Document18982_VT18990.qvd](qvd);
+drop table _Document18982_VT18990;
+//exit script;
