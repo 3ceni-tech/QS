@@ -1,0 +1,941 @@
+﻿//$tab Main------------------------------------------------------------------------------------
+
+SET ThousandSep=' ';
+SET DecimalSep=',';
+SET MoneyThousandSep=' ';
+SET MoneyDecimalSep=',';
+SET MoneyFormat='# ##0,00 ₽;-# ##0,00 ₽';
+SET TimeFormat='h:mm:ss';
+SET DateFormat='DD.MM.YYYY';
+SET TimestampFormat='DD.MM.YYYY h:mm:ss[.fff]';
+SET FirstWeekDay=0;
+SET BrokenWeeks=1;
+SET ReferenceDay=0;
+SET FirstMonthOfYear=1;
+SET CollationLocale='ru-RU';
+SET CreateSearchIndexOnReload=0;
+SET MonthNames='янв.;февр.;мар.;апр.;мая;июн.;июл.;авг.;сент.;окт.;нояб.;дек.';
+SET LongMonthNames='январь;февраль;март;апрель;май;июнь;июль;август;сентябрь;октябрь;ноябрь;декабрь';
+SET DayNames='пн;вт;ср;чт;пт;сб;вс';
+SET LongDayNames='понедельник;вторник;среда;четверг;пятница;суббота;воскресенье';
+SET NumericalAbbreviation='3:k;6:M;9:G;12:T;15:P;18:E;21:Z;24:Y;-3:m;-6:μ;-9:n;-12:p;-15:f;-18:a;-21:z;-24:y';
+
+//===================================================================
+set vDBQvdPath=[lib://OLAP (fixmt_stefanovich)/];
+set vQVDPath=[lib://ETL (fixmt_stefanovich)/];
+//===================================================================
+let FullReload=0; //Полная или частичная перегрузка
+//===================================================================
+let DateStart = date(AddYears(MakeDate((2021),1,1),2000));
+let DateFinish = date(AddYears(today(1),2000));
+let RollBackMonthCount = IF(FullReload=1,13,3);
+//let RollBackMonthCount = IF(FullReload=1,35,IF(match(num(WeekDay(today(2))),5,6),35,3)); 
+//===================================================================
+
+// Exit script;
+
+//$tab Справочники--------------------------------------------------------------------------
+/*
+Справочник.Валюты (_Reference59)
+Справочник.Склады (_Reference132)
+Справочник.Номенклатура (_Reference111)
+Справочник.Контрагенты (_Reference55)
+Справочник.НоменклатурныеГруппы (_Reference112)
+Справочник.Пользователи (_Reference121)
+Справочник.ВидыНоменклатуры (_Reference70)
+*/
+
+Валюта:
+LOAD
+	Text(_IDRRef) as КодВалюты,
+	_Description as  Валюта
+FROM [$(vDBQvdPath)/_Reference/_Reference59.qvd](qvd);
+
+store Валюта into  [$(vQVDPath)Справочники\Валюта.qvd](qvd);
+drop table Валюта;
+
+КатегорияМагазина:
+Load
+	КодТипМагазин,
+	ТипМагазина
+FROM [$(vDBQvdPath)/BUH-PLAYH/_Enum633.qvd](qvd);
+
+mapКатегорияМагазина:
+MAPPING
+LOAD КодТипМагазин,ТипМагазина
+RESIDENT КатегорияМагазина;
+
+Склады:
+LOAD
+	Text(_IDRRef) as КодСклад,
+    _ParentIDRRef,
+    _Code as КодСклад1C,
+	_Description as  Склад,
+    _Fld12772 as Город,
+    _Fld12779RRef as КодРегион,
+    _Fld12835 as НомерМагазинаВSetRetail,
+    _Fld12852 as РЦПродукты,
+    _Fld12794 as РЦТовары,
+    _Fld12837RRef as КодЦентральныйСклад,
+    _Fld21345RRef as КодНаправление,
+    if(_ParentIDRRef='80CA00155D0A560711E846F52AF4AD36',1,0) as exist_TO,
+    Num#(SubField(ApplyMap('mapКатегорияМагазина', _Fld12795RRef,0),' ', 2)) as КатегорияМагазина
+FROM [$(vDBQvdPath)/_Reference/_Reference132.qvd](qvd)
+where _Marked=00;
+
+store Склады into  [$(vQVDPath)Справочники\Склады.qvd](qvd);
+drop table Склады;
+
+Номенклатура:
+LOAD
+	Text(_IDRRef) as КодНоменклатура,
+   // Преобразование GUID 1С в стандартный вид (8-4-4-4-12)
+    Lower(
+//         Mid(_IDRRef, 1, 8)  & '-' &   
+//         Mid(_IDRRef, 9, 4)  & '-' & 
+//         Mid(_IDRRef, 13, 4) & '-' & 
+//         Mid(_IDRRef, 17, 4) & '-' & 
+//         Mid(_IDRRef, 21, 12)
+		   	Mid(_IDRRef, 25, 8) & '-' & 
+        	Mid(_IDRRef, 21, 4) & '-' & 
+        	Mid(_IDRRef, 17, 4) & '-' & 
+        	Mid(_IDRRef, 1, 4)  & '-' & 
+        	Mid(_IDRRef, 5, 12)
+    ) as GUID_Номенклатура,
+    _Code as КодТовара,
+	_Description as  Номенклатура,
+    _Fld12499 as Артикул,
+    _Fld12566 as ТорговаяМарка,
+    if((len(Trim(_Fld21716RRef))=0 OR _Fld21716RRef='00000000000000000000000000000000'),'Не определен',_Fld21716RRef) as КодБренд,
+    _Fld12542RRef as КодОсновнойИзготовитель,
+    _Fld12509RRef as КодВидНоменклатуры,   
+    _Fld12543RRef as КодОсновнойПоставщик,
+    Text(_IDRRef) as КодНоменклатурнаяГруппа,
+    _Fld12545RRef as КодОтветственныйМенеджерЗаПокупки,
+    _Fld12549RRef as КодСтавкаНДС,
+    Text(_Fld12560RRef) as КодnwpСтатусТовара,
+    if(Text(_Fld21088)='', '1,2,3,4,5,6,7,8,9,10,11,12',Text(_Fld21088))  as КотгрузкеВтипТО
+FROM [$(vDBQvdPath)/_Reference/_Reference111.qvd](qvd)
+where _Marked=00;
+
+store Номенклатура into  [$(vQVDPath)Справочники\Номенклатура.qvd](qvd);
+drop table Номенклатура;
+
+Контрагенты:
+LOAD
+	Text(_IDRRef) as КодКонтрагент,
+    _Code as КодКонтрагента,
+    _Fld11753 as УНП_Контрагент,
+    _ParentIDRRef as КодРодитель,
+    _Description  as  Контрагент
+FROM [$(vDBQvdPath)/_Reference/_Reference55.qvd](qvd)
+where _Marked=00;
+
+store Контрагенты into  [$(vQVDPath)Справочники\Контрагенты.qvd](qvd);
+drop table Контрагенты;
+
+tmpНоменклатурныеГруппы:
+Hierarchy(КодНоменклатура, РодительНоменклатура,Номенклатура,,Номенклатура,'path','//')
+load 
+	text(_IDRRef)	as	КодНоменклатура,
+	Text(_Code) as КодУровень,
+	_Folder,
+	text(_ParentIDRRef) as РодительНоменклатура,
+	_Description	as Номенклатура
+FROM [$(vDBQvdPath)/_Reference/_Reference111.qvd](qvd)
+where _Marked=00;
+
+НоменклатурныеГруппы:
+LOAD
+	path,
+	КодНоменклатура as КодНоменклатурнаяГруппа,
+	КодУровень,
+	_Folder,
+	if(Номенклатура2=Номенклатура and _Folder=01,'Не определен',Номенклатура2) as [Номенклатурная группа – Уровень 1],	
+	if(Номенклатура3=Номенклатура and _Folder=01,'Не определен',Номенклатура3) as [Номенклатурная группа – Уровень 2],	
+	if(Номенклатура4=Номенклатура and _Folder=01,'Не определен',if(IsNull(Номенклатура4),'Не определен',Номенклатура4)) as [Номенклатурная группа – Уровень 3],	
+	if(Номенклатура5=Номенклатура and _Folder=01,'Не определен',if(IsNull(Номенклатура5),'Не определен',Номенклатура5)) as [Номенклатурная группа – Уровень 4],			
+	if(Номенклатура6=Номенклатура and _Folder=01,'Не определен',if(IsNull(Номенклатура6),'Не определен',Номенклатура6)) as [Номенклатурная группа – Уровень 5]
+Resident tmpНоменклатурныеГруппы
+where Номенклатура1='ТОВАРЫ';
+DROP Table tmpНоменклатурныеГруппы;
+
+store НоменклатурныеГруппы into  [$(vQVDPath)Справочники\НоменклатурныеГруппы.qvd](qvd);
+drop table НоменклатурныеГруппы;
+
+Пользователи:
+LOAD
+	Text(_IDRRef) as КодПользователь,
+    _Description as ИмяПользователя
+FROM [$(vDBQvdPath)/_Reference/_Reference121.qvd](qvd);
+
+store Пользователи into  [$(vQVDPath)Справочники\Пользователи.qvd](qvd);
+drop table Пользователи;
+
+ВидыНоменклатуры:
+LOAD
+	Text(_IDRRef) as КодВидНоменклатуры,
+    _Description as ВидНоменклатуры
+FROM [$(vDBQvdPath)/_Reference/_Reference70.qvd](qvd)
+where _Marked=00;
+
+store ВидыНоменклатуры into  [$(vQVDPath)Справочники\ВидыНоменклатуры.qvd](qvd);
+drop table ВидыНоменклатуры;
+
+Поставщики:
+LOAD
+	Text(_IDRRef) as КодКонтрагент,
+    _ParentIDRRef as КодРодитель,
+    _Fld11753 as УНП_Контрагент,
+    _Description  as  Поставщик
+FROM 
+	[$(vDBQvdPath)/_Reference/_Reference55.qvd](qvd)
+Where
+	_Folder = 01 and _Marked=00;
+
+store Поставщики into  [$(vQVDPath)Справочники\Поставщики.qvd](qvd);
+drop table Поставщики;
+
+
+Группы_Поставщиков:
+Hierarchy(КодКонтрагент, КодРодитель,_Description)
+load 
+	text(_IDRRef)	as	КодКонтрагент,
+	text(_ParentIDRRef) as КодРодитель,
+    _Description
+FROM 
+	[$(vDBQvdPath)/_Reference/_Reference55.qvd](qvd)
+Where 
+	_Folder = 00 and _Marked=00;;
+    
+store Группы_Поставщиков into  [$(vQVDPath)Справочники\Группы_Поставщиков.qvd](qvd);
+drop table Группы_Поставщиков;
+
+БрендыСТМ:
+LOAD
+	[_IDRRef] as КодБренд,
+    [_Fld21997] as STM,
+    [_Description] as Бренд
+FROM 
+	[$(vDBQvdPath)/_Reference/_Reference21715.qvd](qvd)
+    where _Marked=00;
+store БрендыСТМ into  [$(vQVDPath)Справочники\БрендыСТМ.qvd](qvd);
+drop table БрендыСТМ;    
+
+//(182,330,335,517,660,662,674,735,764,822,823,846,848,855,1286,1386,1412,1496,1628)
+//     if(Match(_Code, 
+//     000000000000182,
+//     000000000000330,
+//     000000000000335,
+//     000000000000517,
+//     000000000000660,
+//     000000000000662,
+//     000000000000674,
+//     000000000000735,
+//     000000000000764,
+//     000000000000822,
+//     000000000000823,
+//     000000000000846,
+//     000000000000848,
+//     000000000000855,
+//     000000000001286,
+//     000000000001386,
+//     000000000001412,
+//     000000000001496,
+//     000000000001628), 1, 0) as STM,
+
+
+//exit script;
+
+//$tab Документы----------------------------------------------------------------------------
+/*
+Документ.ПоступлениеТоваровИУслуг (_Document290)
+Документ.РеализацияТоваровУслуг (_Document299)
+Документ.ОтчетОРозничныхПродажах (_Document270)
+Документ.ВозвратТоваровОтПокупателя (_Document197)
+Документ.ПеремещениеТоваров (_Document272)
+Документ.ВозвратТоваровПоставщику (_Document198)
+Документ.ОприходованиеТоваров (_Document263)
+Документ.СписаниеТоваров (_Document306)
+Документ.nwpРекламнаяАкция (_Document383)
+Документ.ПереоценкаТоваровВРознице (_Document274)
+*/
+
+ПоступлениеТоваровИУслуг:
+LOAD
+	'ПоступлениеТоваровИУслуг' as Документ,
+	Text(_IDRRef) as Ссылка,
+    _Fld4544RRef as КодКонтрагента
+FROM [$(vDBQvdPath)/_Document/_Document290.qvd](qvd);
+
+store ПоступлениеТоваровИУслуг into  [$(vQVDPath)Документы\ПоступлениеТоваровИУслуг.qvd](qvd);
+drop table ПоступлениеТоваровИУслуг;
+
+РеализацияТоваровУслуг:
+LOAD
+	'РеализацияТоваровУслуг' as Документ,
+	Text(_IDRRef)            as Ссылка,
+    Text(_Fld5057RRef)       as КодСклад
+FROM [$(vDBQvdPath)/_Document/_Document299.qvd](qvd);
+
+store РеализацияТоваровУслуг into  [$(vQVDPath)Документы\РеализацияТоваровУслуг.qvd](qvd);
+drop table РеализацияТоваровУслуг;
+
+// ОтчетОРозничныхПродажах:
+// LOAD
+// 	'ОтчетОРозничныхПродажах' as Документ,
+// 	Text(_IDRRef) as Ссылка
+// FROM [$(vDBQvdPath)/_Document/_Document270.qvd](qvd);
+
+// store ОтчетОРозничныхПродажах into  [$(vQVDPath)Документы\ОтчетОРозничныхПродажах.qvd](qvd);
+// drop table ОтчетОРозничныхПродажах;
+
+ВозвратТоваровОтПокупателя:
+LOAD
+	'ВозвратТоваровОтПокупателя' as Документ,
+	Text(_IDRRef)                as Ссылка,
+    Text(_Fld1166_RRRef)         as КодСклад
+FROM [$(vDBQvdPath)/_Document/_Document197.qvd](qvd);
+
+store ВозвратТоваровОтПокупателя into  [$(vQVDPath)Документы\ВозвратТоваровОтПокупателя.qvd](qvd);
+drop table ВозвратТоваровОтПокупателя;
+
+// ПеремещениеТоваров:
+// LOAD
+// 	'ПеремещениеТоваров' as Документ,
+// 	Text(_IDRRef) as Ссылка
+// FROM [$(vDBQvdPath)/_Document/_Document272.qvd](qvd);
+
+// store ПеремещениеТоваров into  [$(vQVDPath)Документы\ПеремещениеТоваров.qvd](qvd);
+// drop table ПеремещениеТоваров;
+
+// ВозвратТоваровПоставщику:
+// LOAD
+// 	'ВозвратТоваровПоставщику' as Документ,
+// 	Text(_IDRRef) as Ссылка
+// FROM [$(vDBQvdPath)/_Document/_Document198.qvd](qvd);
+
+// store ВозвратТоваровПоставщику into  [$(vQVDPath)Документы\ВозвратТоваровПоставщику.qvd](qvd);
+// drop table ВозвратТоваровПоставщику;
+
+// ОприходованиеТоваров:
+// LOAD
+// 	'ОприходованиеТоваров' as Документ,
+// 	Text(_IDRRef) as Ссылка
+// FROM [$(vDBQvdPath)/_Document/_Document263.qvd](qvd);
+
+// store ОприходованиеТоваров into  [$(vQVDPath)Документы\ОприходованиеТоваров.qvd](qvd);
+// drop table ОприходованиеТоваров;
+
+// СписаниеТоваров:
+// LOAD
+// 	'СписаниеТоваров' as Документ,
+// 	Text(_IDRRef) as Ссылка
+// FROM [$(vDBQvdPath)/_Document/_Document306.qvd](qvd);
+
+// store СписаниеТоваров into  [$(vQVDPath)Документы\СписаниеТоваров.qvd](qvd);
+// drop table СписаниеТоваров;
+
+nwpРекламнаяАкция:
+LOAD
+	Text(_IDRRef) as Ссылка,
+    Date#(Date(AddYears(_Fld7736,-2000),'DD.MM.YYYY')) as ДатаНачалаРА,
+    Date#(Date(AddYears(_Fld7737,-2000),'DD.MM.YYYY')) as ДатаОкончанияРА,
+    _Fld7738RRef as КодСтатусРА
+FROM [$(vDBQvdPath)/_Document/_Document383.qvd](qvd)
+where _Posted=01 and _Marked=00 and _Fld7742<>'удалена';
+
+store nwpРекламнаяАкция into  [$(vQVDPath)Документы\nwpРекламнаяАкция.qvd](qvd);
+drop table nwpРекламнаяАкция;
+
+//Документ.ПереоценкаТоваровВРознице
+ПереоценкаТоваровВРознице:
+LOAD
+	'ПереоценкаТоваровВРознице' as Документ,
+	Text(_IDRRef) as Ссылка,
+    _Fld3837RRef as КодСклад
+FROM [$(vDBQvdPath)/_Document/_Document274.qvd](qvd);
+
+store ПереоценкаТоваровВРознице into  [$(vQVDPath)Документы\ПереоценкаТоваровВРознице.qvd](qvd);
+drop table ПереоценкаТоваровВРознице;
+
+//$tab ДокументыСостав----------------------------------------------------------------------
+/*
+Документ.РеализацияТоваровУслуг.Товары (_Document299_VT5114)		
+Документ.ОтчетОРозничныхПродажах.Товары (_Document270_VT3640)		
+Документ.ВозвратТоваровОтПокупателя.Товары (_Document197_VT1211)    
+*/
+let DateInc = DateStart;
+let DateLoadTo = DateFinish; 
+do
+	let DateFrom = DateInc; 
+	let DateTo = MonthEnd(DateInc);
+	let DateToSQL = date(MonthEnd(DateInc)+1);
+	let FileSuffix = Text(date(AddYears(DateInc,-2000),'YYYY_MM'));
+	let InRollBack  = (DateInc>=AddMonths(DateLoadTo, -RollBackMonthCount));
+
+    if InRollBack or isnull(FileSize('$(vQVDPath)/Документы/ДокументРеализацияТоваровУслугТовары/ДокументРеализацияТоваровУслугТовары_$(FileSuffix).qvd')) then
+
+    TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);		//write to log, for debug	
+
+    ДокументРеализацияТоваровУслугТовары:
+    LOAD
+        Text(_Document299_IDRRef) as Ссылка,
+        text(_Fld5122RRef)        as КодНоменклатура,
+        _LineNo5115               as НомерСтроки,
+        _Fld5128                  as СуммаНДС,
+        Text(_Fld5057RRef)        as КодСклад
+    FROM [$(vDBQvdPath)/_Document/_Document299_VT5114/_Document299_VT5114_$(FileSuffix).qvd](qvd);
+
+    store ДокументРеализацияТоваровУслугТовары into  [$(vQVDPath)/Документы/ДокументРеализацияТоваровУслугТовары/ДокументРеализацияТоваровУслугТовары_$(FileSuffix).qvd](qvd);
+    DROP Tables ДокументРеализацияТоваровУслугТовары;
+
+    end if
+
+    if InRollBack or isnull(FileSize('$(vQVDPath)/Документы/ДокументОтчетОРозничныхПродажахТовары/ДокументОтчетОРозничныхПродажахТовары_$(FileSuffix).qvd')) then
+
+    TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);		//write to log, for debug	
+
+    ДокументОтчетОРозничныхПродажахТовары:
+    LOAD
+        Text(_Document270_IDRRef) as Ссылка,
+        text(_Fld3642RRef) as КодНоменклатура,
+        _LineNo3641 as НомерСтроки,
+        _Fld3653 as СуммаНДС
+    FROM [$(vDBQvdPath)/_Document/_Document270_VT3640/_Document270_VT3640_$(FileSuffix).qvd](qvd);
+
+    store ДокументОтчетОРозничныхПродажахТовары into  [$(vQVDPath)/Документы/ДокументОтчетОРозничныхПродажахТовары/ДокументОтчетОРозничныхПродажахТовары_$(FileSuffix).qvd](qvd);
+    DROP Tables ДокументОтчетОРозничныхПродажахТовары;
+
+    end if
+    
+    if InRollBack or isnull(FileSize('$(vQVDPath)/Документы/ДокументВозвратТоваровОтПокупателяТовары/ДокументВозвратТоваровОтПокупателяТовары_$(FileSuffix).qvd')) then
+
+    TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);		//write to log, for debug	
+
+    ДокументВозвратТоваровОтПокупателяТовары:
+    LOAD
+        Text(_Document197_IDRRef) as Ссылка,
+        text(_Fld1213RRef)        as КодНоменклатура,
+        _LineNo1212               as НомерСтроки,
+        _Fld1222                  as СуммаНДС,
+        Text(_Fld1166_RRRef)      as КодСклад
+    FROM [$(vDBQvdPath)/_Document/_Document197_VT1211/_Document197_VT1211_$(FileSuffix).qvd](qvd);
+
+    store ДокументВозвратТоваровОтПокупателяТовары into  [$(vQVDPath)/Документы/ДокументВозвратТоваровОтПокупателяТовары/ДокументВозвратТоваровОтПокупателяТовары_$(FileSuffix).qvd](qvd);
+    DROP Tables ДокументВозвратТоваровОтПокупателяТовары;
+
+    end if
+    
+    
+    if InRollBack or isnull(FileSize('$(vQVDPath)/Документы/ДокументnwpРекламнаяАкцияТовары/ДокументnwpРекламнаяАкцияТовары_$(FileSuffix).qvd')) then
+
+    TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);		//write to log, for debug	
+
+    ДокументnwpРекламнаяАкцияТовары:
+    LOAD
+        Text(_Document383_IDRRef) as Ссылка,
+        text(_Fld7748RRef) as КодНоменклатура
+    FROM [$(vDBQvdPath)/_Document/_Document383_VT7745/_Document383_VT7745_$(FileSuffix).qvd](qvd);
+
+    store ДокументnwpРекламнаяАкцияТовары into  [$(vQVDPath)/Документы/ДокументnwpРекламнаяАкцияТовары/ДокументnwpРекламнаяАкцияТовары_$(FileSuffix).qvd](qvd);
+    DROP Tables ДокументnwpРекламнаяАкцияТовары;
+
+    end if
+    
+    
+    if InRollBack or isnull(FileSize('$(vQVDPath)/Документы/ДокументnwpРекламнаяАкцияТовары/ДокументnwpРекламнаяАкцияТовары_$(FileSuffix).qvd')) then
+
+    TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);		//write to log, for debug	
+
+    ДокументnwpРекламнаяАкцияТовары:
+    LOAD
+        Text(_Document383_IDRRef) as Ссылка,
+        text(_Fld7748RRef) as КодНоменклатура
+    FROM [$(vDBQvdPath)/_Document/_Document383_VT7745/_Document383_VT7745_$(FileSuffix).qvd](qvd);
+
+    store ДокументnwpРекламнаяАкцияТовары into  [$(vQVDPath)/Документы/ДокументnwpРекламнаяАкцияТовары/ДокументnwpРекламнаяАкцияТовары_$(FileSuffix).qvd](qvd);
+    DROP Tables ДокументnwpРекламнаяАкцияТовары;
+
+    end if
+    
+
+let DateInc = timestamp(AddMonths(DateInc, 1));
+
+LOOP while not InMonth(DateInc, DateLoadTo, 1);	
+
+//$tab РегистрыCведений---------------------------------------------------------------------
+/*
+РегистрСведений.КурсыВалют (_InfoRg9130)
+РегистрСведений.ЗначенияСвойствОбъектов (_InfoRg9002)
+РегистрСведений.Штрихкоды (_InfoRg9929)
+РегистрСведений.ЦеныАТТ (_InfoRg9871)
+*/
+
+КурсыВалют:
+LOAD
+	Date#(Date(AddYears(_Period,-2000),'DD.MM.YYYY')) as Дата,
+    _Fld9131RRef as КодВалюты,
+    _Fld9132/_Fld9133 as Курс,
+    _Fld9133 as Кратность
+FROM [$(vDBQvdPath)/_InfoRg/_InfoRg9130.qvd](qvd);
+
+store КурсыВалют into  [$(vQVDPath)РегистрыСведений\КурсыВалют.qvd](qvd);
+drop table КурсыВалют;
+
+ЗначенияСвойствОбъектов:
+Load	
+	_Fld9003_RRRef as КодОбъект,
+    _Fld9004RRef as КодСвойство,
+    _Fld9005_L as Значение1,
+    _Fld9005_N as Значение2,
+    _Fld9005_S as Значение3
+FROM [$(vDBQvdPath)/_InfoRg/_InfoRg9002.qvd](qvd);
+
+store ЗначенияСвойствОбъектов into  [$(vQVDPath)РегистрыСведений\ЗначенияСвойствОбъектов.qvd](qvd);
+drop table ЗначенияСвойствОбъектов;
+
+Штрихкоды:
+Load	
+	_Fld9931_RRRef as КодШтрихкод,
+	_Fld9930 as Штрихкод
+FROM [$(vDBQvdPath)/_InfoRg/_InfoRg9929.qvd](qvd);
+
+store Штрихкоды into  [$(vQVDPath)РегистрыСведений\Штрихкоды.qvd](qvd);
+drop table Штрихкоды;
+
+ЦеныАТТ:
+Load	
+	Date#(Date(AddYears(_Period,-2000),'DD.MM.YYYY')) as Дата,
+    Text(_RecorderRRef) as Ссылка,
+	_Fld9872RRef as КодСклад,	 
+	_Fld9873RRef as КодНоменклатура,	
+	_Fld9877 as Цена	
+FROM [$(vDBQvdPath)/_InfoRg/_InfoRg9871.qvd](qvd);
+
+store ЦеныАТТ into  [$(vQVDPath)РегистрыСведений\ЦеныАТТ.qvd](qvd);
+drop table ЦеныАТТ;
+
+//$tab РегистрыНакоплений-------------------------------------------------------------------
+
+//Подготавливаем документы Оптовых складов
+
+ВидСкладаExists:
+LOAD
+  0 as _EnumOrder
+AutoGenerate(1);//0 - оптовый склад
+
+ВидыСкладовExistsId:
+LOAD
+  _IDRRef as _Fld12766RRef,
+  _EnumOrder
+FROM 
+  [lib://OLAP (fixmt_stefanovich)/_Enum/_Enum486.qvd](qvd)
+Where 
+  Exists(_EnumOrder);
+
+Склады:
+LOAD
+  _IDRRef as _Fld5057RRef,
+  _IDRRef as _Fld1166_RRRef,
+  _Fld12766RRef
+FROM 
+  [lib://OLAP (fixmt_stefanovich)/_Reference/_Reference132.qvd](qvd)
+Where 
+  Exists(_Fld12766RRef);
+
+Drop Tables ВидСкладаExists, ВидыСкладовExistsId;
+
+ККМ_NotExists:
+LOAD
+  '00000000000000000000000000000000' as _Fld1209RRef
+AutoGenerate(1);// Пустой ЧекККМ
+
+ОптExists:
+LOAD
+  _IDRRef as _RecorderRRef,
+  _Fld5057RRef
+FROM 
+  [lib://OLAP (fixmt_stefanovich)/_Document/_Document299.qvd](qvd)
+Where 
+  Exists(_Fld5057RRef);
+
+Concatenate(ОптExists)
+LOAD
+  _IDRRef  as _RecorderRRef,
+  _Fld1166_RRRef,
+  _Fld1209RRef
+FROM 
+  [lib://OLAP (fixmt_stefanovich)/_Document/_Document197.qvd](qvd)
+Where 
+  Exists(_Fld1209RRef) and Exists(_Fld1166_RRRef);
+
+Drop Tables Склады, ККМ_NotExists;
+
+
+
+/*
+РегистрНакопления.ПартииТоваровНаСкладах (_AccumRg11058)
+РегистрНакопления.ТоварыВРознице (_AccumRg11432)
+*/
+let DateInc = DateStart;
+let DateLoadTo = DateFinish; 
+
+do
+	let DateFrom = DateInc; 
+	let DateTo = MonthEnd(DateInc);
+	let DateToSQL = date(MonthEnd(DateInc)+1);
+	let FileSuffix = Text(date(AddYears(DateInc,-2000),'YYYY_MM'));
+	let InRollBack  = (DateInc>=AddMonths(DateLoadTo, -RollBackMonthCount));
+
+	if InRollBack or isnull(FileSize('$(vQVDPath)/РегистрыНакоплений/ПартииТоваровНаСкладах/ПартииТоваровНаСкладах_$(FileSuffix).qvd')) then
+
+	TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);		//write to log, for debug	
+
+    ПартииТоваровНаСкладах:
+    LOAD
+        Date#(Date(AddYears(_Period,-2000),'DD.MM.YYYY')) as	Дата,
+//         2 As ТипДвижения,
+        _Active as Активность,
+        Text(_RecorderRRef) as Ссылка,
+        Text(_RecorderTRef) as ТипДокумент,
+        _RecordKind as ВидДвижения,
+//         _LineNo as Строка,
+        text(_Fld11059RRef) as КодНоменклатура,
+        text(_Fld11060RRef) as КодСклад,
+        text(_Fld11063_RRRef) as КодДокументОприходования,	
+        _Fld11067 as Количество,
+        _Fld11069 as Себестоимость 
+        
+        
+    FROM [$(vDBQvdPath)/_AccumRg/_AccumRg11058/_AccumRg11058_$(FileSuffix).qvd](qvd);
+
+	store ПартииТоваровНаСкладах into  [$(vQVDPath)/РегистрыНакоплений/ПартииТоваровНаСкладах/ПартииТоваровНаСкладах_$(FileSuffix).qvd](qvd);
+	DROP Tables ПартииТоваровНаСкладах;
+	
+    end if
+
+	if InRollBack or isnull(FileSize('$(vQVDPath)/РегистрыНакоплений/ТоварыВРознице/ТоварыВРознице_$(FileSuffix).qvd')) then
+
+	TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);		//write to log, for debug	
+
+    ТоварыВРознице:
+    LOAD
+        Date#(Date(AddYears(_Period,-2000),'DD.MM.YYYY')) as	Дата,
+        Text(_RecorderRRef) as Ссылка,
+        Text(_RecorderTRef) as ТипДокумент,
+        text(_Fld11434RRef) as КодНоменклатура,
+        text(_Fld11433RRef) as КодСклад,
+        _LineNo             as НомерСтроки,
+        _Fld11438           as Количество,
+        _Fld11442           as Стоимость,
+        _Fld11439           as СуммаПродажная
+//         Sum(_Fld11439)/Sum(_Fld11438) as ЦенаПродажная,
+//         Sum(_Fld11442)/Sum(_Fld11438) as Цена 
+    FROM [$(vDBQvdPath)/_AccumRg/_AccumRg11432/_AccumRg11432_$(FileSuffix).qvd](qvd);
+    //Group by _RecorderRRef,_RecorderTRef,_Period,_Fld11434RRef,_Fld11433RRef;
+    
+    
+        
+	store ТоварыВРознице into  [$(vQVDPath)/РегистрыНакоплений/ТоварыВРознице/ТоварыВРознице_$(FileSuffix).qvd](qvd);
+	DROP Tables ТоварыВРознице;
+	
+    end if
+    
+//     if InRollBack or isnull(FileSize('$(vQVDPath)/РегистрыНакоплений/ПартииТоваровНаСкладахИтоги/ПартииТоваровНаСкладахИтоги_$(FileSuffix).qvd')) then
+
+// 	TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);		//write to log, for debug	
+
+//     ПартииТоваровНаСкладахИтоги:
+//     LOAD
+//         Date#(Date(AddYears(_Period,-2000),'DD.MM.YYYY')) as	Дата,
+//         text(_Fld11059RRef) as КодНоменклатура,
+//         text(_Fld11060RRef) as КодСклад,
+//         text(_Fld11063_RRRef) as КодДокументОприходования,	
+//         _Fld11067 as Количество,
+//         _Fld11069 as Себестоимость         
+        
+//     FROM [$(vDBQvdPath)/_AccumRg/_AccumRgT11081/_AccumRgT11081_$(FileSuffix).qvd](qvd);
+
+// 	store ПартииТоваровНаСкладахИтоги into  [$(vQVDPath)/РегистрыНакоплений/ПартииТоваровНаСкладахИтоги/ПартииТоваровНаСкладахИтоги_$(FileSuffix).qvd](qvd);
+// 	DROP Tables ПартииТоваровНаСкладахИтоги;
+    
+// 	end if
+	if InRollBack or isnull(FileSize('$(vQVDPath)/РегистрыНакоплений/ПродажиОпт/ПродажиОпт_$(FileSuffix).qvd')) then
+
+        ПродажиTmp:
+        LOAD
+            _Period,
+            _RecorderTRef,
+            _RecorderRRef,
+            _LineNo,
+            _Fld11223RRef,
+            _Fld11233,
+            _Fld11234,
+            _Fld11235
+        FROM 
+            [lib://OLAP (fixmt_stefanovich)/_AccumRg/_AccumRg11222/_AccumRg11222_$(FileSuffix).qvd](qvd)
+        Where 
+            Exists(_RecorderRRef);
+
+        ПродажиОпт:
+        LOAD
+            Date#(Date(AddYears(_Period,-2000),'DD.MM.YYYY')) 	as Дата,
+            Text(_RecorderRRef) 								as Ссылка,
+            Text(_RecorderTRef) 								as ТипДокумент,
+            Text(_Fld11223RRef) 								as КодНоменклатура,
+            _LineNo 											as НомерСтроки,
+            _Fld11233 											as Количество ,
+            _Fld11234 											as Стоимость,
+            _Fld11235 											as СтоимостьБезСкидок
+        Resident 
+            ПродажиTmp;
+
+        Drop Table ПродажиTmp;
+
+        store ПродажиОпт into  [$(vQVDPath)/РегистрыНакоплений/ПродажиОпт/ПродажиОпт_$(FileSuffix).qvd](qvd);
+        DROP Tables ПродажиОпт;
+	
+    end if
+
+
+let DateInc = timestamp(AddMonths(DateInc, 1));
+
+LOOP while not InMonth(DateInc, DateLoadTo, 1);	
+
+Drop Table ОптExists;
+
+//$tab ПланВидовХарактеристик---------------------------------------------------------------
+/*
+ПланВидовХарактеристик.СвойстваОбъектов (_Chrc656)
+*/
+
+СвойстваОбъектов:
+LOAD
+	Text(_IDRRef) as Ссылка,
+    _Code as КодСвойства
+FROM [$(vDBQvdPath)/_Chrc/_Chrc656.qvd](qvd);
+
+store СвойстваОбъектов into  [$(vQVDPath)ПланВидовХарактеристик\СвойстваОбъектов.qvd](qvd);
+drop table СвойстваОбъектов;
+
+
+//$tab Перечисления-------------------------------------------------------------------------
+
+/*
+Перечисление.nwpСтатусРА (_Enum624)
+Перечисление.СтавкиНДС (_Enum565)
+Перечисление.nwpСтатусТовара (_Enum625)
+*/
+
+nwpСтатусРА:
+Load	
+	Text(_IDRRef) as КодnwpСтатусРА,
+    _EnumOrder as  Порядок
+FROM [$(vDBQvdPath)/_Enum/_Enum624.qvd](qvd);
+Left Join(nwpСтатусРА)
+LOAD * Inline
+[Порядок,nwpСтатусРА
+0,На согласовании
+1,Согласовано
+2,Выгружено
+3,Действует
+4,Завершена
+];
+
+DROP Field Порядок From nwpСтатусРА;
+store nwpСтатусРА into  [$(vQVDPath)Перечисление\nwpСтатусРА.qvd](qvd);
+drop table nwpСтатусРА;
+
+СтавкиНДС:
+Load	
+	Text(_IDRRef) as КодСтавкиНДС,
+    _EnumOrder as  Порядок
+FROM [$(vDBQvdPath)/_Enum/_Enum565.qvd](qvd);
+Left Join(СтавкиНДС)
+LOAD * Inline
+[Порядок,СтавкаНДС
+0,'18%'
+1,'18% / 118%'
+2,'10%'
+3,'10% / 110%'
+4,'0%'
+5,'Без НДС'
+6,'20%'
+7,'20% / 120%'
+8,'22%'
+9,'22% / 122%'
+10,'24%'
+11,'24% / 124%'
+12,'Расчетная'
+13,'16,67%'
+14,'9,09%'
+];
+
+DROP Field Порядок From СтавкиНДС;
+store СтавкиНДС into  [$(vQVDPath)Перечисление\СтавкиНДС.qvd](qvd);
+drop table СтавкиНДС;
+
+nwpСтатусТовара:
+Load	
+	Text(_IDRRef) as КодnwpСтатусТовара,
+    _EnumOrder as  Порядок
+FROM [$(vDBQvdPath)/_Enum/_Enum625.qvd](qvd);
+Left Join(nwpСтатусТовара)
+LOAD * Inline
+[Порядок,nwpСтатусТовара, АктивныйАссортимент
+0,'Анализ',0
+1,'Ассортимент',1
+2,'ВИП',1
+3,'Возврат',0
+4,'Вывод',0
+5,'Новинка',0
+6,'Приостановка поставок',0
+7,'Сток',0
+8,'Сезон',1
+9,'Корзина доп продаж',1
+10,'Анонс',1
+11,'(не использ.) Зима',0
+12,'(не использ.) Лето',0
+13,'АП',1
+14,'KVI',1
+15,'Рекламная игра',1
+16, Распродажа,1
+17, Неликвид,0
+];
+
+DROP Field Порядок From nwpСтатусТовара;
+store nwpСтатусТовара into  [$(vQVDPath)Перечисление\nwpСтатусТовара.qvd](qvd);
+drop table nwpСтатусТовара;
+
+//exit script;
+
+//$tab BUH-PLAYH----------------------------------------------------------------------------
+СкладыBUH:
+LOAD
+	_Fld16146_RRRef as КодСклад,
+    Num#(_Fld16144) as НомерМагазина
+FROM [$(vDBQvdPath)/BUH-PLAYH/_Reference115.qvd](qvd)
+where Num#(_Fld16144) > 0;
+
+left Join
+
+LOAD
+	_Fld12835 as НомерМагазина,
+    _Description as  Склад,
+    _Fld12772 as Город,
+    _Fld12795RRef as КодТипМагазин, // Категория магазина
+	_Fld12851 as РейтингАВС,
+    _Fld12863 as РаботаСПродуктами,
+    _Fld12893 as Широта,
+    _Fld12894 as Долгота
+FROM [$(vDBQvdPath)/_Reference/_Reference132.qvd](qvd)
+where _Fld12835 > 0;
+
+left Join
+
+Load
+	КодТипМагазин,
+	ТипМагазина
+RESIDENT КатегорияМагазина;
+
+store СкладыBUH into  [$(vQVDPath)Справочники\СкладыBUH.qvd](qvd);
+
+drop table СкладыBUH, КатегорияМагазина;
+
+//exit script;
+ДокументПоказателиОтчетаПоТО:
+LOAD
+    _Document18982_IDRRef as Ссылка,
+    Дата,
+    _KeyField as Ключ,
+    _LineNo18991 as НомерСтроки,
+    _Fld18992RRef as ТорговыеОбъекты,
+//     _Fld18993 as ВыручкаСНДС,
+//     _Fld18994 as ВыручкаМелкийОпт,
+    _Fld18995 as ВыручкаИтого,
+    _Fld18996 as ВыручкаБезНДС,
+    _Fld18997 as Себестоимость, 
+    _Fld18998 as ДоляСебестоимостиВВыручкеБезНДС,
+    _Fld18999 as ВаловаяПрибыль,
+    _Fld19000 as ДоляВВыручкеБезНДС,
+    _Fld19001 as ОплатаТрудаТО,
+    _Fld19002 as ДоляФОТвВыручкеБезНДС,
+    _Fld19003 as ОплатаТрудаУправление,
+    _Fld19004 as ОтчисленияВФСЗНБелгосстрах,
+    _Fld19005 as КоммунальныеУслуги,
+    _Fld19006 as УслугиСвязи,
+    _Fld19007 as ТехническоеОбслуживаниеКСА,
+    _Fld19008 as ТехническоеОбслуживаниеТреминалов,
+    _Fld19009 as ОбслуживаниеОборудования,
+    _Fld19010 as Маркетинг,
+    _Fld19011 as АмортизацияОС,
+    _Fld19012 as СЭС,
+    _Fld19013 as БанковскиеУслуги,
+    _Fld19014 as АмортизацияМБП,
+    _Fld19015 as АрендаПомещений,
+    _Fld19016 as ДоляАрендыВВыручкеБезНДС,
+    _Fld19017 as ПогрузоРазгрузочныеРаботы,
+    _Fld19018 as ПочтовыеРасходы,
+    _Fld19019 as УслугиПоУстановкеМонтажу,
+    _Fld19020 as СырьеИМатериалы,
+    _Fld19119 as НДСНаЗатраты,
+    _Fld19021 as НалогНаНедвижимость,
+    _Fld19022 as СодержаниеИРемонтЗдания,
+    _Fld19023 as ПрочиеРасходы,
+    _Fld19024 as СборОператоруВторичныхРесурсов,
+    _Fld19025 as ТранспортныеРасходы,
+    _Fld19657 as НедостачаИБрак,
+    _Fld19026 as ДоляРеализационныхРасходовВВыручкеБезНДС,
+    _Fld19027 as МаржинальнаяПрибыль1,
+    _Fld19028 as РентабельностьПродаж1,
+    _Fld19029 as Склад,
+    _Fld19030 as МаржинальнаяПрибыль2,
+    _Fld19031 as РентабельностьПродаж2,
+    _Fld19032 as ОХР,
+    _Fld19033 as БалансоваяПрибыль,
+    _Fld19034 as РентабельностьПродаж
+//     _Fld19120 as Изменен,
+//     _Fld19121 as ИзмененныеДанные
+FROM [$(vDBQvdPath)/BUH-PLAYH/_Document18982_VT18990.qvd]
+(qvd);
+
+store ДокументПоказателиОтчетаПоТО into  [$(vQVDPath)/Документы/ДокументПоказателиОтчетаПоТО.qvd](qvd);
+    DROP Tables ДокументПоказателиОтчетаПоТО;
+    
+let DateLoadStart = MakeDate(2023,1,1);
+let DateLoadEnd = MonthEnd(today(1));
+let IncPeriod = DateLoadStart;
+
+
+do 
+
+	let PeriodStart = IncPeriod;
+	let PeriodEnd = AddMonths(IncPeriod, 1);
+	let FileSuffix = Text(date(IncPeriod,'YYYY_MM'));
+    let InRollBack  = (IncPeriod>=AddMonths(DateLoadTo, -RollBackMonthCount));
+
+    if InRollBack or isnull(FileSize('$(vQVDPath)/SET/BUH-PLAYH/Чеки/ЧекиФинМодельТО_$(FileSuffix).qvd')) then
+	
+	TRACE 'Calc period= $(FileSuffix)';
+
+чеки:
+LOAD
+    Dayname(Дата)                                              as ДатаЧеки,
+    Count(distinct If(operationtype=True(),id))                as колво_чек,
+    shopindex                                                  as НомерМагазина,
+    sum(If(operationtype=True(),checksumend,-checksumend))/100 as Сумма
+FROM [$(vQVDPath)/SET/od_purchase/od_purchase_$(FileSuffix).qvd](qvd)
+    where shopindex>0 and id>0
+    Group by Dayname(Дата), shopindex;
+
+store чеки into  [$(vQVDPath)/SET/BUH-PLAYH/Чеки/ЧекиФинМодельТО_$(FileSuffix).qvd](qvd);
+    DROP Tables чеки;
+    end if
+
+let IncPeriod = AddMonths(IncPeriod, 1);
+loop while not InMonth(IncPeriod, DateLoadEnd, 1);
+
+//exit script;
+
+
