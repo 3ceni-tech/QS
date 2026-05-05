@@ -1,0 +1,363 @@
+﻿//$tab Main------------------------------------------------------------------------------------
+
+SET ThousandSep=' ';
+SET DecimalSep=',';
+SET MoneyThousandSep=' ';
+SET MoneyDecimalSep=',';
+SET MoneyFormat='# ##0,00 ₽;-# ##0,00 ₽';
+SET TimeFormat='h:mm:ss';
+SET DateFormat='DD.MM.YYYY';
+SET TimestampFormat='DD.MM.YYYY h:mm:ss[.fff]';
+SET FirstWeekDay=0;
+SET BrokenWeeks=1;
+SET ReferenceDay=0;
+SET FirstMonthOfYear=1;
+SET CollationLocale='ru-RU';
+SET CreateSearchIndexOnReload=0;
+SET MonthNames='янв.;февр.;мар.;апр.;мая;июн.;июл.;авг.;сент.;окт.;нояб.;дек.';
+SET LongMonthNames='январь;февраль;март;апрель;май;июнь;июль;август;сентябрь;октябрь;ноябрь;декабрь';
+SET DayNames='пн;вт;ср;чт;пт;сб;вс';
+SET LongDayNames='понедельник;вторник;среда;четверг;пятница;суббота;воскресенье';
+SET NumericalAbbreviation='3:k;6:M;9:G;12:T;15:P;18:E;21:Z;24:Y;-3:m;-6:μ;-9:n;-12:p;-15:f;-18:a;-21:z;-24:y';
+
+//===================================================================
+set vQVDPath=[lib://ETL_FM/];
+//===================================================================
+let FullReload=0; //Полная "1" или частичная "0" перегрузка
+//===================================================================
+Let vDateStart 	= MakeDate(2023,1,1);//Дата начала загрузки
+Let vDateFinish = Date(Today(1));
+// Let vDateStartStocks=Date('01.07.2021'); //для второго расчёта
+// let RollBackMonthCount = IF(FullReload=1,23,3);
+let RollBackMonthCount = IF(FullReload=1,23,IF(match(num(WeekDay(today(1))),6),23,3)); 
+//===================================================================
+
+//$tab мапинг контрагентов------------------------------------------------------------------
+
+let DateInc = vDateStart;
+let DateLoadTo = vDateFinish; 
+
+do
+	let DateFrom = DateInc; 
+	let DateTo = MonthEnd(DateInc);
+	let DateToSQL = date(MonthEnd(DateInc)+1);
+	let FileSuffix = Text(Date(DateInc, 'YYYY_MM'));
+	let InRollBack  = (DateInc>=AddMonths(DateLoadTo, -RollBackMonthCount));
+
+//РегистрНакопления.ПартииТоваровНаСкладах - РегистрНакопления.УчетПартий (_AccumRg20384)
+	if InRollBack or isnull(FileSize('$(vQVDPath)/РегистрыНакоплений/ПартииТоваровНаСкладах/ПартииТоваровНаСкладах_$(FileSuffix).qvd')) then
+	TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);		//write to log, for debug	
+
+// Создаем карту соответствий КодКонтрагент
+    mapКонтрагентMapping:
+    MAPPING LOAD 
+        Ссылка&КодНоменклатура, 
+        КодКонтрагент
+    FROM [$(vQVDPath)/РегистрыНакоплений/ТоварыВРознице/ТоварыВРознице_$(FileSuffix).qvd](qvd);
+
+    ПартииТоваровНаСкладах:
+	Load 
+    	Ссылка,
+        Дата,
+        Активность,
+        ТипДокумент,
+        ВидДвижения,
+        НомерСтроки,
+        КодНоменклатура,
+        КодСклад,
+        КодДокументОприходования,  //Партия
+        Количество,
+		СебестоимостьБНДС,
+        СуммаНДСсебес,
+        КодОперации,
+        ApplyMap('mapКонтрагентMapping', Ссылка&КодНоменклатура, КодКонтрагент) as КодКонтрагент
+    
+    FROM [$(vQVDPath)/РегистрыНакоплений/ПартииТоваровНаСкладах/ПартииТоваровНаСкладах_$(FileSuffix).qvd](qvd);
+  
+    
+    store ПартииТоваровНаСкладах into  [$(vQVDPath)/РегистрыНакоплений/ПартииТоваровНаСкладах/ПартииТоваровНаСкладах_$(FileSuffix).qvd](qvd);
+	DROP Tables ПартииТоваровНаСкладах;
+	end if
+    
+    
+let DateInc = timestamp(AddMonths(DateInc, 1));
+
+LOOP while not InMonth(DateInc, DateLoadTo, 1);	
+//exit script;
+
+//$tab ОстатокНаКонецМесяца-----------------------------------------------------------------
+
+////=====================================================================
+// mapКонтрагент:
+// mapping load 
+// 	КодКонтрагент,  
+//     Контрагент
+// FROM [$(vQVDPath)/Справочники/Контрагенты.qvd](qvd);
+
+// mapПоставщик:
+// mapping load 
+//     Ссылка as КодДокументОприходования,
+//     ApplyMap ('mapКонтрагент', КодКонтрагент,'Не определен') As Поставщик
+// FROM [$(vQVDPath)/Документы/ПоступлениеТоваровИУслуг.qvd](qvd)
+// where Ссылка<>'00000000000000000000000000000000';
+
+mapОсновнойПоставщик:
+mapping load
+	КодНоменклатура,  
+ 	КодОсновнойПоставщик
+FROM [$(vQVDPath)/Справочники/НоменклатураКонтрагентов.qvd](qvd);
+//===================================================================
+
+//Оставляем только Уровень=ТОВАРЫ
+НоменклатурныеГруппы:
+NoConcatenate LOAD
+    КодНоменклатурнаяГруппа
+FROM [$(vQVDPath)/Справочники/НоменклатурныеГруппы.qvd](qvd);
+
+НоменклатураTMP:
+NoConcatenate LOAD
+    КодНоменклатура as КодНоменклатураTMP
+FROM [$(vQVDPath)/Справочники/Номенклатура.qvd](qvd)
+Where Exists(КодНоменклатурнаяГруппа);
+Drop table НоменклатурныеГруппы; 
+//===================================================================
+
+//Цикл для расчета остатка на конец месяца
+Let vDateInc = vDateStart;
+Do
+
+    Let vFileSuffix 	= Text(Date(vDateInc, 'YYYY_MM'));
+    Let vFileSuffixPrev = Text(Date(AddMonths(vDateInc, - 1), 'YYYY_MM'));    
+    Let vFinalFileIsNull 		= IsNull(FileSize('$(vQVDPath)\Остатки\Остатки на конец месяца\ОстаткиНаКонецМесяца_$(vFileSuffix).qvd'));
+    Let vFinalFilePrevIsNull	= IsNull(FileSize('$(vQVDPath)\Остатки\Остатки на конец месяца\ОстаткиНаКонецМесяца_$(vFileSuffixPrev).qvd'));
+    Let vOriginalFileIsNull 	= IsNull(FileSize('$(vQVDPath)\РегистрыНакоплений\ПартииТоваровНаСкладах\ПартииТоваровНаСкладах_$(vFileSuffix).qvd'));
+
+    Let vInRollBack  = vDateInc >= AddMonths(vDateFinish, -RollBackMonthCount);
+    
+    If (vInRollBack or vFinalFileIsNull) and not vOriginalFileIsNull then
+        
+        tmp:
+        LOAD 
+        	MonthEnd(Дата) as Дата,
+            ВидДвижения,           
+            КодНоменклатура,
+            КодСклад,
+            //КодКонтрагент,
+            /////////////////////////////////////////////////////  or len(КодКонтрагент)=0 B9F400155D1D6B2011EF77103135D4CE 00000000000000000000000000000000
+            //if(text(КодКонтрагент)='', ApplyMap('mapОсновнойПоставщик', КодНоменклатура, КодКонтрагент),КодКонтрагент) as Поставщик,КодКонтрагент='00000000000000000000000000000000' or КодКонтрагент='' or 
+            if((IsNull(КодКонтрагент) or КодКонтрагент='' or КодКонтрагент='00000000000000000000000000000000'), ApplyMap('mapОсновнойПоставщик', КодНоменклатура,'~NULL'), КодКонтрагент) as Поставщик,
+            //ApplyMap ('mapПоставщик', КодДокументОприходования,  ApplyMap ('mapОсновнойПоставщик', КодНоменклатура,'Не определен')) As Поставщик,
+            //ApplyMap ('mapПоставщик', КодДокументОприходования, ApplyMap ('mapПоставщик', КодНоменклатура)) As Поставщик,
+            //КодКонтрагент as Поставщик,
+            СебестоимостьБНДС,
+   			Количество
+        FROM [$(vQVDPath)/РегистрыНакоплений/ПартииТоваровНаСкладах/ПартииТоваровНаСкладах_$(vFileSuffix).qvd](qvd)
+        Where Exists(КодНоменклатураTMP,КодНоменклатура) and Активность=1;
+        
+        Move:
+        NoConcatenate
+        LOAD
+        	Дата,
+            КодНоменклатура,
+            КодСклад,
+            Поставщик,
+            Sum(if(ВидДвижения=0,СебестоимостьБНДС,-СебестоимостьБНДС)) as СуммаОстаток,
+            Sum(if(ВидДвижения=0,Количество,-Количество)) as КоличествоОстаток
+        Resident tmp
+        Group by Дата,КодНоменклатура,КодСклад,Поставщик;	
+        DROP Table tmp; 
+        
+        
+       If not vFinalFilePrevIsNull then
+        
+        Concatenate(Move)
+        LOAD
+            MonthEnd(ДатаНачалоМесяца) as Дата,
+            КодНоменклатура,
+            КодСклад,
+            Поставщик,
+            СуммаОстаток,
+            КоличествоОстаток
+        FROM 
+            [$(vQVDPath)\Остатки\Остатки на конец месяца\ОстаткиНаКонецМесяца_$(vFileSuffixPrev).qvd](qvd);	
+		
+        End If
+        
+		Stock:
+		LOAD
+            Дата as ДатаКонецМесяца,
+            Date(Floor(Дата + 1)) as ДатаНачалоМесяца,
+            КодНоменклатура,
+            КодСклад,
+            Поставщик,
+            //if(text(Поставщик)='00000000000000000000000000000000' or len(Поставщик)<=0, ApplyMap('mapОсновнойПоставщик', КодНоменклатура, Поставщик),Поставщик) as Поставщик,
+            Sum(СуммаОстаток) as СуммаОстаток,
+            Sum(КоличествоОстаток) as КоличествоОстаток
+		Resident Move
+		Group by Дата,КодНоменклатура,КодСклад,Поставщик;	
+		DROP Table Move;	
+
+        store Stock into  [$(vQVDPath)\Остатки\Остатки на конец месяца\ОстаткиНаКонецМесяца_$(vFileSuffix).qvd](qvd);		
+		DROP Table Stock;	
+
+    End If 
+Let vDateInc =  Date(AddMonths(vDateInc, 1));	
+Loop while vDateInc < vDateFinish; 
+
+//exit script;
+
+
+
+
+//$tab ОстатокКД----------------------------------------------------------------------------
+Let vDateInc = vDateStart;
+
+do 
+	let PeriodStart = Date(vDateInc);
+	let PeriodEnd = if(date(floor(MonthEnd(PeriodStart)))<Date(vDateFinish-1) ,date(MonthEnd(PeriodStart)),Date(vDateFinish)-1);
+	let FileSuffix = Year(PeriodStart)&'_'&text(num(Month(PeriodStart),'00'));
+    let FileSuffix2 = Year(AddMonths(PeriodStart,-1))&'_'&text(num(Month(AddMonths(PeriodStart,-1)),'00')); //Остатки формируются на конец месяца и суффикс берется от даты конца месяца, поэтому берем минус 1 месяц.
+    let InRollBack  = (vDateInc>=AddMonths(vDateFinish, -RollBackMonthCount));
+    
+TRACE 	$(PeriodStart) -- 	$(PeriodEnd)-- $(vDateFinish);
+	
+if InRollBack or isnull(FileSize('$(vQVDPath)Остатки\Остатки по дням\Stock_by_Day_$(FileSuffix).qvd')) then
+
+  TRACE 'Calc period= $(FileSuffix)';    
+   TRACE 'Calc period2 $(FileSuffix2)';
+   
+   TRACE 'PeriodStart= $(PeriodStart)'; 
+   TRACE 'PeriodEnd= $(PeriodEnd)'; 
+
+		if not isnull(FileSize('$(vQVDPath)Остатки\Остатки на конец месяца\ОстаткиНаКонецМесяца_$(FileSuffix2).qvd')) then
+		
+		tmpStock:
+		LOAD
+            ДатаНачалоМесяца as Дата,
+            КодНоменклатура,
+            КодСклад,
+            Поставщик,
+            СуммаОстаток,
+            КоличествоОстаток
+        FROM [$(vQVDPath)Остатки\Остатки на конец месяца\ОстаткиНаКонецМесяца_$(FileSuffix2).qvd](qvd);	
+        
+        else
+     
+        tmpStock:
+        LOAD * Inline 
+        [СуммаОстаток,КоличествоОстаток
+        0,0
+        ];
+        
+        endif
+
+        Move:
+        NoConcatenate LOAD 
+            Дата,
+            КодНоменклатура,
+            КодСклад,
+            ////////////////////////////////////////////
+            if((IsNull(КодКонтрагент) or КодКонтрагент='' or КодКонтрагент='00000000000000000000000000000000'), ApplyMap('mapОсновнойПоставщик', КодНоменклатура,'~NULL'), КодКонтрагент) as Поставщик,
+            //ApplyMap('mapКонтрагент', КодКонтрагент, 'Не определен') as Поставщик,
+            //ApplyMap ('mapПоставщик', КодДокументОприходования,  ApplyMap ('mapОсновнойПоставщик', КодНоменклатура,'Не определен')) As Поставщик,
+            Sum(if(ВидДвижения=0,СебестоимостьБНДС,-СебестоимостьБНДС)) as ДвижениеСебестоимость,
+   			Sum(if(ВидДвижения=0,Количество,-Количество)) as ДвижениеКоличество
+        FROM [$(vQVDPath)\РегистрыНакоплений\ПартииТоваровНаСкладах\ПартииТоваровНаСкладах_$(FileSuffix).qvd](qvd)
+        //Where Exists(КодНоменклатураTMP,КодНоменклатура) and Активность=01
+        Group by 
+            Дата,
+            КодНоменклатура,
+            КодСклад,
+            /////////////////////////////////////////////////////
+            //КодКонтрагент
+            if((IsNull(КодКонтрагент) or КодКонтрагент='' or КодКонтрагент='00000000000000000000000000000000'), ApplyMap('mapОсновнойПоставщик', КодНоменклатура,'~NULL'), КодКонтрагент)
+        ; 
+                
+        Outer Join(tmpStock)
+        LOAD
+            *
+        Resident Move;
+        DROP Table Move;
+        
+
+Calendar: 
+load date('$(PeriodStart)' + IterNo() -1) as Дата
+autogenerate 1
+while ('$(PeriodStart)'+IterNo()-1)<='$(PeriodEnd)';
+
+Left Join(Calendar)
+LOAD Distinct 
+	 Min(Дата) as Дата,
+     '1' as flgMinDate
+Resident Calendar; 
+
+Left Join(Calendar)
+LOAD Distinct 
+	 Max(Дата) as Дата,
+     '1' as flgMaxDate
+Resident Calendar; 
+
+Left Join(Calendar)
+LOAD Distinct 
+	 КодНоменклатура,
+     КодСклад,
+     Поставщик
+Resident tmpStock; 
+
+StockCalendar:
+NoConcatenate
+LOAD 
+	КодНоменклатура,
+    КодСклад,
+    Поставщик,
+	Дата,
+    flgMinDate,
+    flgMaxDate
+Resident Calendar 
+Order by   КодСклад,Поставщик,КодНоменклатура,Дата,flgMinDate,flgMaxDate asc;
+DROP Table Calendar; 
+
+Left Join(StockCalendar)
+LOAD  
+    Дата,
+    КодНоменклатура,
+    КодСклад,
+    Поставщик,
+    СуммаОстаток,
+    КоличествоОстаток,
+	rangesum(ДвижениеСебестоимость,СуммаОстаток) as Движение_Суммы_за_день,
+    rangesum(ДвижениеКоличество,КоличествоОстаток) as Движение_Количества_за_день
+Resident tmpStock;
+DROP Table tmpStock;
+
+
+Stock_by_Day:
+NoConcatenate
+LOAD 
+	 КодНоменклатура,
+     КодСклад,
+     Поставщик,
+	 Дата,
+     flgMinDate,
+     flgMaxDate,
+ 	 if (Previous(КодСклад)=КодСклад and Previous(Поставщик)=Поставщик and Previous(КодНоменклатура)=КодНоменклатура, 
+     	RangeSum(num(peek("#Остаток без НДС (с/с)")), Движение_Суммы_за_день), Движение_Суммы_за_день) as "#Остаток без НДС (с/с)",   
+     if (Previous(КодСклад)=КодСклад and Previous(Поставщик)=Поставщик and Previous(КодНоменклатура)=КодНоменклатура, 
+     	RangeSum(num(peek("#Остаток, шт.")), Движение_Количества_за_день), Движение_Количества_за_день) as "#Остаток, шт.",
+     if (Previous(КодСклад)=КодСклад and Previous(Поставщик)=Поставщик and Previous(КодНоменклатура)=КодНоменклатура,
+     	Num(Peek("#Остаток, шт.")), КоличествоОстаток) as "#Остаток, шт. начало",
+     if (Previous(КодСклад)=КодСклад and Previous(Поставщик)=Поставщик and Previous(КодНоменклатура)=КодНоменклатура,
+     	Num(Peek("#Остаток без НДС (с/с)")), СуммаОстаток) as "#Остаток без НДС (с/с) начало" 
+Resident StockCalendar 
+Order by  КодСклад,Поставщик,КодНоменклатура,Дата,flgMinDate,flgMaxDate asc;
+DROP Table StockCalendar;
+
+store Stock_by_Day into  [$(vQVDPath)Остатки\Остатки по дням\Stock_by_Day_$(FileSuffix).qvd](qvd);		
+Drop Table Stock_by_Day;
+ENDIF;
+
+let vDateInc = timestamp(AddMonths(vDateInc, 1));
+LOOP while not InMonth(vDateInc, vDateFinish, 1);
+
+drop table НоменклатураTMP;
+
