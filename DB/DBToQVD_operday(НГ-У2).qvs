@@ -1,0 +1,241 @@
+﻿//$tab Main------------------------------------------------------------------------------------
+
+SET ThousandSep=' ';
+SET DecimalSep=',';
+SET MoneyThousandSep=' ';
+SET MoneyDecimalSep=',';
+SET MoneyFormat='# ##0,00 ₽;-# ##0,00 ₽';
+SET TimeFormat='h:mm:ss';
+SET DateFormat='DD.MM.YYYY';
+SET TimestampFormat='DD.MM.YYYY hh:mm:ss[.fff]';
+SET FirstWeekDay=0;
+SET BrokenWeeks=1;
+SET ReferenceDay=0;
+SET FirstMonthOfYear=1;
+SET CollationLocale='ru-RU';
+SET CreateSearchIndexOnReload=0;
+SET MonthNames='янв.;февр.;мар.;апр.;мая;июн.;июл.;авг.;сент.;окт.;нояб.;дек.';
+SET LongMonthNames='январь;февраль;март;апрель;май;июнь;июль;август;сентябрь;октябрь;ноябрь;декабрь';
+SET DayNames='пн;вт;ср;чт;пт;сб;вс';
+SET LongDayNames='понедельник;вторник;среда;четверг;пятница;суббота;воскресенье';
+SET NumericalAbbreviation='3:k;6:M;9:G;12:T;15:P;18:E;21:Z;24:Y;-3:m;-6:μ;-9:n;-12:p;-15:f;-18:a;-21:z;-24:y';
+
+//===================================================================
+set vDBQvdPath=[lib://OLAP (fixmt_stefanovich)/];
+set vQVDPath=[lib://ETL (fixmt_stefanovich)/];
+set vExcelPath=[lib://Excel (fixmt_stefanovich)/];
+//===================================================================
+let FullReload=0;
+//===================================================================
+let DateStart = date(MakeDate(2023,01,1));
+let DateFinish = date(today(1));
+let RollBackMonthCount = IF(FullReload=1,36,3);
+//let RollBackMonthCount = IF(FullReload=1,35,IF(match(num(WeekDay(today(2))),5,6),35,3)); 
+ 
+//===================================================================
+LIB CONNECT TO 'UT-PLAYH (fixmt_stefanovich)'; //Продуктив
+//LIB CONNECT TO 'UT-PLAYH (fixmt_esipovich)';
+//===================================================================
+
+
+//$tab SET Таблицы--------------------------------------------------------------------------
+
+/*
+Чеки - od_purchase - кол-во и сумма чеков
+
+*/
+LIB CONNECT TO 'set_operday (fixmt_esipovich)';
+
+let DateInc = DateStart;
+let DateLoadTo = DateFinish; 
+
+do
+	let DateFrom = DateInc; 
+	let DateTo = MonthEnd(DateInc);
+	let DateToSQL = date(MonthEnd(DateInc)+1);
+	let FileSuffix = Text(date(AddYears(DateInc,-0),'YYYY_MM'));
+	let InRollBack  = (DateInc>=AddMonths(DateLoadTo, -RollBackMonthCount));	
+
+if InRollBack or isnull(FileSize('$(QVDPath)/SET1/od_purchase/od_purchase_$(FileSuffix).qvd')) then
+	
+TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);	
+
+// LOAD *;
+// [od_purchase]:
+// SQL SELECT 
+// 	op.id_purchase, 
+// 	op.datecommit as Дата, 
+//     op.ndssum as НДС, 
+//     op.qnty as Кво, 
+//     op.sumfield as Сумма, 
+//     op2.operationtype, 
+//     os.shopindex, 
+//     op3.barcode as Штрихкод
+// FROM set_operday.public.od_position op
+// 	join set_operday.public.od_purchase op2 on op2.id = op.id_purchase
+// 	join set_operday.public.od_shift os on os.id = op2.id_shift
+// 	join set_operday.public.od_product as op3 on op3.hash = op.product_hash
+// WHERE op.datecommit>= '$(DateFrom)' and op.datecommit< '$(DateToSQL)' and op2.checkstatus =0;
+
+
+LOAD *;
+[od_purchase]:
+SQL SELECT 
+	id_purchase, 
+//	datecommit as Дата, 
+    ndssum as НДС, 
+    qnty as Кво, 
+    sumfield as Сумма, 
+    product_hash
+FROM set_operday.public.od_position
+WHERE datecommit>= '$(DateFrom)' and datecommit< '$(DateToSQL)' and id_purchase IS NOT NULL;
+
+join (od_purchase)
+LOAD *;
+SQL SELECT
+	id as id_purchase,
+    datecommit as Дата,
+    operationtype,
+ 	id_shift	
+FROM public.od_purchase
+where datecommit>= '$(DateFrom)' and datecommit< '$(DateToSQL)' and checkstatus=0;
+
+join (od_purchase)
+LOAD *;
+SQL SELECT
+	id as id_shift,
+    shopindex
+	FROM public.od_shift
+	where operday>= '$(DateFrom)' and operday< '$(DateToSQL)' and shopindex<>350
+    group by id;
+
+store od_purchase into [$(QVDPath)/SET1/od_purchase/od_purchase_$(FileSuffix).qvd](qvd);
+drop table od_purchase;
+ENDIF
+
+let DateInc = timestamp(AddMonths(DateInc, 1));
+LOOP while not InMonth(DateInc, DateLoadTo, 1);
+
+LOAD *;
+[od_product]:
+SQL SELECT
+	hash as product_hash,
+    barcode,
+    item
+	FROM public.od_product;
+store od_product into [$(QVDPath)/SET1/od_product.qvd](qvd);
+drop table od_product;
+
+
+//exit script;
+
+
+//$tab SET Акции------------------------------------------------------------------
+
+LIB CONNECT TO 'set_loyal (fixmt_esipovich)';
+
+LOAD *;
+[action_ref]: 
+SQL
+	SELECT guid as "Код_Акция", action_name as "Акция", action_type, apply_mode,
+    external_code, discount_type, labels, "groups", action_name_for_customer
+	FROM public.loy_adv_action_in_purchase;
+store action_ref into [$(QVDPath)/SET1/action_ref.qvd](qvd);
+drop table action_ref;
+
+let DateInc = DateStart;
+let DateLoadTo = DateFinish; 
+
+do
+	let DateFrom = DateInc; 
+	let DateTo = MonthEnd(DateInc);
+	let DateToSQL = date(MonthEnd(DateInc)+1);
+	let FileSuffix = Text(date(AddYears(DateInc,-0),'YYYY_MM'));
+	let InRollBack  = (DateInc>=AddMonths(DateLoadTo, -RollBackMonthCount));	
+
+if InRollBack or isnull(FileSize('$(QVDPath)/SET1/action/action_$(FileSuffix).qvd')) then
+
+	
+TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);	
+
+LOAD *;
+[action]: 
+SQL
+	SELECT lt.sale_time, lt.shop_number as shopindex, lt.purchase_number, lp.good_code as "Код товара", lp.advert_act_guid as "Код_Акция", lp.discount_amount/100.0 as "Скидка", lp.qnty/1000.0 as "Кво" 
+	FROM public.loy_discount_positions as lp
+	left join public.loy_transaction lt on lt.id = lp.transaction_id
+    WHERE lt.sale_time>= '$(DateFrom)' and lt.sale_time< '$(DateToSQL)';
+store action into [$(QVDPath)/SET1/action/action_$(FileSuffix).qvd](qvd);
+drop table action;
+
+ENDIF
+
+let DateInc = timestamp(AddMonths(DateInc, 1));
+LOOP while not InMonth(DateInc, DateLoadTo, 1); 
+
+//exit script;
+
+
+//$tab РеализацияТоваровУслуг_1С--------------------------------------------------
+
+// //Документ.РеализацияТоваровУслуг 
+// РеализацияТоваровУслуг:
+// LOAD *;	
+// SQL SELECT 
+// 	_IDRRef as Ссылка,
+//     _NumberPrefix as Дата,
+//     _Fld5057RRef as КодСклад,
+//     _Fld5047RRef as ТипПродажи,
+//     _Fld5065 as Сумма_бн,
+// 	_Fld5112 as НДС_бн,
+// 	_Fld20196 as СебесбНДС_бн 
+// FROM "UT-PLAYH".dbo."_Document299";
+
+// left join 
+// load *;
+// SQL SELECT
+//     (_Document299_IDRRef) as Ссылка,
+//     Sum(_Fld5119) as Количество_бн,
+// 	Sum(_Fld5127) as Сумма1,
+// 	Sum(_Fld5128) as СуммаНДС1,
+// 	Sum(_Fld5138)as Себес1
+// FROM "UT-PLAYH".dbo."_Document299_VT5114"
+// 	Group by _Document299_IDRRef;
+
+// Left Join
+// load *;
+// SQL SELECT
+// 	(_IDRRef) as КодСклад,
+// 	_Fld12835 as shopindex
+// FROM "UT-PLAYH".dbo."_Reference132";
+// // LOAD
+// // 	Text(_IDRRef) as КодСклад,
+// //     //_Description as  Склад,
+// //     //_Fld12772 as Город,
+// //     _Fld12835 as shopindex
+// // FROM [$(vDBQvdPath)/_Reference/_Reference132.qvd](qvd);
+// store РеализацияТоваровУслуг into  [$(vQVDPath)/SET/РеализацияТоваровУслуг_1С.qvd](qvd);
+// drop table РеализацияТоваровУслуг;
+
+
+
+//$tab Раздел---------------------------------------------------------------------
+
+LIB CONNECT TO 'dbt_data';
+LIB CONNECT TO 'dbt_data';
+
+[int_receipts_prognosis]:
+LOAD date, 
+	checks_count, 
+	avg_check, 
+	revenue;
+
+SELECT "date",
+	"checks_count",
+	"avg_check",
+	"revenue"
+FROM "raw_intermediate"."int_receipts_prognosis";
+
+store int_receipts_prognosis into [$(QVDPath)/SET/prognosis.qvd](qvd);
+
+//exit script;
