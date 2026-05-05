@@ -1,0 +1,306 @@
+﻿//$tab Main------------------------------------------------------------------------------------
+
+SET ThousandSep=' ';
+SET DecimalSep=',';
+SET MoneyThousandSep=' ';
+SET MoneyDecimalSep=',';
+SET MoneyFormat='# ##0,00 ₽;-# ##0,00 ₽';
+SET TimeFormat='h:mm:ss';
+SET DateFormat='DD.MM.YYYY';
+SET TimestampFormat='DD.MM.YYYY hh:mm:ss[.fff]';
+SET FirstWeekDay=0;
+SET BrokenWeeks=1;
+SET ReferenceDay=0;
+SET FirstMonthOfYear=1;
+SET CollationLocale='ru-RU';
+SET CreateSearchIndexOnReload=0;
+SET MonthNames='янв.;февр.;мар.;апр.;мая;июн.;июл.;авг.;сент.;окт.;нояб.;дек.';
+SET LongMonthNames='январь;февраль;март;апрель;май;июнь;июль;август;сентябрь;октябрь;ноябрь;декабрь';
+SET DayNames='пн;вт;ср;чт;пт;сб;вс';
+SET LongDayNames='понедельник;вторник;среда;четверг;пятница;суббота;воскресенье';
+SET NumericalAbbreviation='3:k;6:M;9:G;12:T;15:P;18:E;21:Z;24:Y;-3:m;-6:μ;-9:n;-12:p;-15:f;-18:a;-21:z;-24:y';
+
+//===================================================================
+set QVDPath=[lib://ETL_FM/];
+set vExcelPath=[lib://Excel (fixmt_stefanovich)/];
+//LIB CONNECT TO 'UKM5 (fixmt_esipovich)';
+LIB CONNECT TO 'UKM5-WBFM-CHECKS (fixmt_esipovich)';
+
+//===================================================================
+let FullReload=0;
+//===================================================================
+let DateStart = date(MakeDate(2024,08,1)); //date(AddYears(MakeDate((2024),8,1),2000));
+let DateFinish = date(today(1)); //date(AddYears(today(1),2000));
+let RollBackMonthCount = IF(FullReload=1,25,2); //2
+//let RollBackMonthCount = IF(FullReload=1,35,IF(match(num(WeekDay(today(2))),5,6),35,3)); 
+
+//$tab UKM5 Таблицы-----------------------------------------------------------------------
+
+let DateInc = AddYears(DateStart, 2000);
+let DateLoadTo = AddYears(DateFinish, 2000); 
+
+СетьСклад:
+Load
+	КодСклад,
+    If(Left(Склад, 2) = 'ВП', 'One Price','Три цены') as Сеть
+FROM [$(vQVDPath)Справочники\Склады.qvd](qvd)
+where ВидСклада = 'B226380115F390574F8AA4F6CA67FA69';
+
+mapСетьСклад:
+MAPPING
+LOAD КодСклад, Сеть
+RESIDENT СетьСклад;
+
+do
+	let DateFrom = DATE(DateInc); 
+	let DateTo = MonthEnd(DateInc);
+	let DateToSQL = date(MonthEnd(DateInc)+1);
+	let FileSuffix = Text(date(AddYears(DateInc,-2000),'YYYY_MM'));
+	let InRollBack  = (DateInc>=AddMonths(DateLoadTo, -RollBackMonthCount));	
+
+if InRollBack or isnull(FileSize('$(QVDPath)/UKM5/raw_receipt_1c/raw_receipt_$(FileSuffix).qvd')) then
+
+
+TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);	
+
+[raw_receipt]:
+SQL SELECT
+	HASHBYTES('MD5', vt257.[_Document107_IDRRef] + CAST(vt257.[_Fld259] AS VARBINARY(50))) as receipt_id,
+	Count(DISTINCT vt257.[_Fld260]) as sku_count, 
+    SUM(vt257.[_Fld262]) as items_count, 
+    SUM(vt257.[_Fld264]) as amount,
+    SUM(vt257.[_Fld1758]) as discount,
+	d107.[_Fld242] as store_id, 
+    vt246.[_Fld256] as type, 
+    DATEADD(year, -2000, vt246.[_Fld1775]) as date_close
+from [UKM5-WBFM-CHECKS].dbo.[_Document107_VT257] as vt257
+JOIN [UKM5-WBFM-CHECKS].dbo.[_Document107] as d107 on d107.[_IDRRef] = vt257.[_Document107_IDRRef]
+JOIN [UKM5-WBFM-CHECKS].dbo.[_Document107_VT246] as vt246 
+    ON vt246.[_Document107_IDRRef] = vt257.[_Document107_IDRRef]
+    AND vt246.[_Fld248] = vt257.[_Fld259]
+where Convert(date,vt246.[_Fld1775],104)>= Convert(date,'$(DateFrom)',104) and Convert(date,vt246.[_Fld1775],104)< Convert(date,'$(DateToSQL)',104)
+group by vt257.[_Document107_IDRRef], vt257.[_Fld259], d107.[_Fld242], vt246.[_Fld256], vt246.[_Fld1775] ;
+
+store raw_receipt into [$(QVDPath)/UKM5/raw_receipt_1c/raw_receipt_$(FileSuffix).qvd](qvd);
+drop table raw_receipt;
+ENDIF
+
+if InRollBack or isnull(FileSize('$(QVDPath)/UKM5/1c_data/1c_data_$(FileSuffix).qvd')) then
+	
+[1c_data]:
+Load
+	Дата,
+    Count(DISTINCT КодНоменклатура) as SKU,
+    Sum(СуммаПродажная) as Сумма1с,
+    Sum(Количество) as Количество1с,
+    Sum(СуммаНДС) as NDS,
+    Sum(Стоимость) as себес,
+    ApplyMap('mapСетьСклад',КодСклад) as Сеть
+    FROM [$(vQVDPath)/РегистрыНакоплений/ТоварыВРознице/ТоварыВРознице_$(FileSuffix).qvd](qvd)
+    where ТипДокумент <> '000002B5'// OR ТипДокумент <> '00000266'
+    Group by Дата, ApplyMap('mapСетьСклад',КодСклад);
+
+store [1c_data] into [$(QVDPath)/UKM5/1c_data/1c_data_$(FileSuffix).qvd](qvd);
+drop table [1c_data];
+
+ENDIF
+
+let DateInc = timestamp(AddMonths(DateInc, 1));
+LOOP while not InMonth(DateInc, DateLoadTo, 1);
+
+План:
+LOAD 
+    Date(Дата) as Дата,
+    план_выручка,
+    план_трафик,
+    план_срчек,
+    план_то,
+    план_вп,
+ 	'Три цены' as Сеть
+FROM [$(vExcelPath)/oper_plan_RU.xlsx] (ooxml, embedded labels, table is [Три Цены]);
+
+CONCATENATE (План)
+LOAD 
+    Date(Дата) as Дата,
+    план_выручка,
+    план_трафик,
+    план_срчек,
+    план_то,
+    план_вп,
+    'One Price' as Сеть
+FROM [$(vExcelPath)/oper_plan_RU.xlsx] (ooxml, embedded labels, table is [One Price]); 
+
+store План into [$(QVDPath)/UKM5/oper_plan_RU.qvd](qvd);
+drop table План;
+
+// [stores]:
+// SQL 
+// SELECT
+// 	id as store_id,
+// 	SUBSTRING_INDEX(TRIM(name),' ',1) as "Номер магазина"
+// FROM srvdata.store;
+// store stores into [$(QVDPath)/UKM5/stores1.qvd](qvd);
+// drop table stores
+//SUBSTRING_INDEX(TRIM([_Description]),' ',1) as "Номер магазина"
+// LOAD *;
+[storesUKM]:
+SQL 
+SELECT
+	[_Fld1739] as store_id,
+	LEFT([_Description], CHARINDEX(' ', [_Description] + ' ') - 1) as "Номер магазина"
+FROM [UKM5-WBFM-CHECKS].dbo.[_Reference1737]
+where [_Marked] = 0x00;
+store storesUKM into [$(QVDPath)/UKM5/storesUKM.qvd](qvd);
+drop table storesUKM;
+
+//exit script;
+
+
+//$tab SET-----------------------------------------------------------------------
+
+/*
+Чеки - od_purchase - кол-во и сумма чеков
+
+*/
+LIB CONNECT TO 'set_operday_wbfm (fixmt_esipovich)';
+
+let DateInc = DateStart;
+let DateLoadTo = DateFinish; 
+
+do
+	let DateFrom = DateInc; 
+	let DateTo = MonthEnd(DateInc);
+	let DateToSQL = date(MonthEnd(DateInc)+1);
+	let FileSuffix = Text(date(AddYears(DateInc,-0),'YYYY_MM'));
+	let InRollBack  = (DateInc>=AddMonths(DateLoadTo, -RollBackMonthCount));	
+    
+[storesSET]:
+SQL SELECT
+      shopindex as store_id,
+      CASE
+          WHEN shopindex BETWEEN 1 AND 999 
+              THEN 'ФМ_' || LPAD(shopindex::TEXT, 2, '0')
+          WHEN shopindex BETWEEN 9001 AND 9999 
+              THEN 'ВП_' || LPAD((shopindex - 9000)::TEXT, 2, '0')
+          ELSE NULL
+      END AS "Номер магазина"
+    FROM public.od_shift  
+	group by shopindex;
+store storesSET into [$(QVDPath)/UKM5/storesSET.qvd](qvd);
+drop table storesSET;
+
+if InRollBack or isnull(FileSize('$(QVDPath)/SET/od_purchase/od_purchase_$(FileSuffix).qvd')) then
+
+TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);	
+
+LOAD *;
+[od_purchase]:
+SQL SELECT
+	id,
+    id_shift,
+	datecommit as Дата,
+    operationtype,
+    checksumend
+FROM public.od_purchase
+where datecommit>= '$(DateFrom)' and datecommit< '$(DateToSQL)' and checkstatus=0 ;
+
+join (od_purchase)
+LOAD *;
+//[od_position]:
+SQL SELECT
+	id_purchase as id,
+    Count(id) as strok,
+	SUM(ndssum) as NDS,
+    SUM(qnty)/1000 as qty_item
+FROM public.od_position
+where datecommit>= '$(DateFrom)' and datecommit< '$(DateToSQL)' 
+group by id_purchase;
+
+join (od_purchase)
+LOAD *;
+//[od_shift]:
+SQL SELECT
+	id as id_shift,
+    shopindex as store_id
+	FROM public.od_shift
+	where operday>= '$(DateFrom)' and operday< '$(DateToSQL)'
+    group by id;
+
+store od_purchase into [$(QVDPath)/SET/od_purchase/od_purchase_$(FileSuffix).qvd](qvd);
+drop table od_purchase;
+ENDIF
+
+let DateInc = timestamp(AddMonths(DateInc, 1));
+LOOP while not InMonth(DateInc, DateLoadTo, 1);
+
+
+// [stores]:
+// SQL SELECT
+//       shopindex as store_id,
+//       CASE
+//           WHEN shopindex BETWEEN 1 AND 999 
+//               THEN 'ФМ_' || LPAD(shopindex::TEXT, 2, '0')
+//           WHEN shopindex BETWEEN 9001 AND 9999 
+//               THEN 'ВП_' || LPAD((shopindex - 9000)::TEXT, 2, '0')
+//           ELSE NULL
+//       END AS "Номер магазина"
+//     FROM public.od_shift  
+// 	group by shopindex;
+    
+// store stores into [$(QVDPath)/UKM5/stores.qvd](qvd);
+// drop table stores;
+
+//exit script;
+
+
+//$tab Счетчики посетителей-----------------------------------------------------------------
+
+LIB CONNECT TO 'CountMax_FM (fixmt_esipovich)';
+
+let DateInc = DateStart;
+let DateLoadTo = DateFinish; 
+
+do
+	let DateFrom = DateInc; 
+	let DateTo = MonthEnd(DateInc);
+	let DateToSQL = date(MonthEnd(DateInc)+1);
+	let FileSuffix = Text(date(AddYears(DateInc,-0),'YYYY_MM'));
+	let InRollBack  = (DateInc>=AddMonths(DateLoadTo, -RollBackMonthCount));	
+
+if InRollBack or isnull(FileSize('$(QVDPath)/Countmax/visitors/visitors_$(FileSuffix).qvd')) then
+
+	
+TRACE 	$(DateFrom) -- 	$(DateTo)-- $(DateToSQL);	
+
+LOAD *;
+[visitors]:
+SELECT 	cmse.ID_Enter, 
+		cme.NameEnter,
+        cme.ID_Project,
+        //cast(RIGHT(cme.NameEnter, (len(cme.NameEnter)-PATINDEX('%[1-9]%',cme.NameEnter)+1)) as int) as store_id, 
+		//cmse.TimeRecord as Дата,
+        (CASE
+        	WHEN cme.ID_Project = 113128817 THEN 'ВП_'
+        	WHEN cme.ID_Project = 135910632 THEN 'ФМ_'
+     	END) +
+    		FORMAT(CAST(SUBSTRING(cme.NameEnter, CHARINDEX(' ', cme.NameEnter, CHARINDEX(' ', cme.NameEnter) + 1) + 1, 100) AS INT), '00') AS "Номер магазина",
+      	convert(date,cmse.TimeRecord,104) as Дата,
+		DATEPART(hour, cmse.TimeRecord) as час,
+		Sum(cmse.SumIn+cmse.SumOut)/2 as чел
+        //cmse.SumIn as visitors_in,
+		//cmse.SumOut as visitors_out
+FROM Countmax.dbo.CM_StorageEnter as cmse
+join Countmax.dbo.Cm_Enter as cme on cmse.ID_Enter = cme.ID_Enter
+where Convert(date,cmse.TimeRecord,104)>= Convert(date,'$(DateFrom)',104) and Convert(date,cmse.TimeRecord,104)< Convert(date,'$(DateToSQL)',104) 
+and cmse.SumIn<>0 and cmse.SumOut<>0 
+
+group by cmse.ID_Enter, cme.ID_Project, cme.NameEnter, convert(date,cmse.TimeRecord,104), DATEPART(hour, cmse.TimeRecord); 
+
+store visitors into [$(QVDPath)/Countmax/visitors/visitors_$(FileSuffix).qvd](qvd);
+drop table visitors;
+ENDIF
+
+let DateInc = timestamp(AddMonths(DateInc, 1));
+LOOP while not InMonth(DateInc, DateLoadTo, 1); 
+
+//exit script;
